@@ -1,0 +1,27 @@
+langchain
+langgraph
+langchain-groq
+langchain-cerebras
+langchain-nvidia-ai-endpoints
+langchain_experimental
+
+python-dotenv
+
+fastapi
+gunicorn
+pydantic
+requests
+
+neo4j
+pinecone
+
+Unstructured
+PyMuPDF
+
+fastMCP
+mcp[cli]
+
+# docling
+# sentence-transformers
+
+# uv add langchain langgraph langchain-groq langchain-cerebras langchain_experimental sentence-transformers python-dotenv fastapi gunicorn pydantic requests neo4j pinecone docling Unstructured PyMuPDF
