@@ -1,0 +1,24 @@
+fastapi>=0.117.1
+fastmcp>=2.12.3
+gunicorn>=23.0.0
+langchain>=0.3.27
+langchain-cerebras>=0.5.0
+langchain-groq>=0.3.8
+langgraph>=0.6.7
+mcp[cli]>=1.14.1
+neo4j>=5.28.2
+pinecone>=7.3.0
+pydantic>=2.11.9
+pymupdf>=1.26.4
+requests>=2.32.5
+unstructured>=0.18.15
+langchain-nvidia-ai-endpoints>=0.3.18
+sentence-transformers
+
+langchain_text_splitters
+qdrant-client[fastembed]
+langchain-qdrant
+langchain_community
+
+# langchain-experimental>=0.3.4
+# docling>=2.54.0
