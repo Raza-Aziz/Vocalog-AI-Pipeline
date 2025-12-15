@@ -18,16 +18,16 @@ EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384 
 
 # Environment variables for Qdrant Cloud
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL_ENDPOINT")
-QDRANT_KEY = os.getenv("QDRANT_API_KEY")
 
-if not QDRANT_URL or not QDRANT_KEY:
+if not QDRANT_URL or not QDRANT_API_KEY:
     raise ValueError("QDRANT_URL_ENDPOINT or QDRANT_API_KEY is missing from .env")
 
 # Initialize Client
 client = QdrantClient(
     url=QDRANT_URL,
-    api_key=QDRANT_KEY
+    api_key=QDRANT_API_KEY
 )
 
 # Initialize Embedding Model

@@ -18,7 +18,6 @@ from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph impo
 
 app = FastAPI(title="Vocalog AI - Document Generation Module", version="1.0.0")
 
-
 # @app.post("/generate-mom")
 @app.post(
     "/generate-mom",response_class=PlainTextResponse)
@@ -166,3 +165,6 @@ async def get_document_status(document_id: str):
         total_sections=outline_len
     )
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
