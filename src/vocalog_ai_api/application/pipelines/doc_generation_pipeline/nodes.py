@@ -1,20 +1,41 @@
 import time
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_openai import ChatOpenAI
+# from langchain_openai import ChatOpenAI
 from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
+
+# --- NEW IMPORTS ---
+from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.vector_store import (
+    ingest_minutes,
+    retrieve_context
+)
+
 from src.vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
 # Toggle this for real LLM vs Fast Demo
-MOCK_MODE = False 
+MOCK_MODE = False  # Set to False to test real Qdrant + OpenAI interaction
 
 # llm = ChatOpenAI(model="gpt-4o", temperature=0.7) if not MOCK_MODE else None
 
 def initialize_document(state: DocumentGenerationState) -> DocumentGenerationState:
-    """Parses minutes and creates an SRS outline."""
-    print("--- Initializing Document ---")
+    """
+    1. Ingests raw minutes into Qdrant Vector Store.
+    2. Creates the SRS outline.
+    """
+    print("--- Initializing Document & Vectorizing Data ---")
     
-    # In a real scenario, LLM decides sections based on minutes.
-    # For demo, we hardcode standard SRS sections.
+    session_id = state["session_id"]
+    raw_minutes = state["meeting_minutes"]
+
+    # --- STEP 1: Vector Ingestion ---
+    # We only want to do this once. In a real app, you might check if it already exists.
+    try:
+        ingest_minutes(session_id, raw_minutes)
+        print(f"Successfully vectorized minutes for Session: {session_id}")
+    except Exception as e:
+        print(f"Error during vectorization: {e}")
+        # In production, you might raise an error or handle gracefully
+        
+    # --- STEP 2: Create Outline ---
     outline = [
         "1. Introduction",
         "2. Meeting Attendees & Roles",
@@ -30,7 +51,11 @@ def initialize_document(state: DocumentGenerationState) -> DocumentGenerationSta
     }
 
 def generate_section(state: DocumentGenerationState) -> DocumentGenerationState:
-    """Generates content for the CURRENT section based on context."""
+    """
+    Generates content using RAG:
+    1. Retrieves relevant chunks from Qdrant based on section title.
+    2. Feeds those chunks to LLM.
+    """
     current_idx = state["current_section_index"]
     sections = state["sections_outline"]
     
@@ -38,17 +63,29 @@ def generate_section(state: DocumentGenerationState) -> DocumentGenerationState:
         return {**state, "is_complete": True}
 
     section_title = sections[current_idx]
-    minutes = state["meeting_minutes"]
+    session_id = state["session_id"]
     feedback = state.get("feedback_notes")
     
     print(f"--- Generating Section: {section_title} ---")
 
-    # Construct Prompt
-    prompt = f"""
-    You are writing an SRS document based on these meeting minutes:
-    {minutes}
+    # --- STEP 3: RAG Retrieval ---
+    # Instead of dumping all 'meeting_minutes', we fetch what is relevant for THIS section.
+    # We use the section title as the search query.
+    relevant_context = retrieve_context(session_id, query=section_title, limit=4)
     
-    Current Task: Write content for section '{section_title}'.
+    print(f"Context Retrieved: {len(relevant_context)} chars")
+
+    # --- STEP 4: Construct Prompt with Context ---
+    prompt = f"""
+    You are an expert Technical Writer creating a Software Requirements Specification (SRS).
+    
+    Task: Write the content for the section: '{section_title}'.
+    
+    Reference Context (Use ONLY this information to write the section):
+    {relevant_context}
+    
+    If the context does not contain enough information for this specific section, 
+    write a placeholder stating what is missing, but do not hallucinate facts.
     """
     
     if feedback:
@@ -56,10 +93,8 @@ def generate_section(state: DocumentGenerationState) -> DocumentGenerationState:
 
     content = ""
     if MOCK_MODE:
-        time.sleep(1) # Simulate thinking
-        content = f"### {section_title}\n\n[Demo Content based on minutes]\nThis is a generated draft for {section_title}.\nBased on discussion: {minutes[:50]}..."
-        if feedback:
-            content += f"\n\n(Addressed feedback: {feedback})"
+        time.sleep(1)
+        content = f"### {section_title}\n\n[Generated via RAG]\nContext used: {relevant_context[:50]}...\nContent..."
     else:
         response = llm.invoke([HumanMessage(content=prompt)])
         content = response.content
@@ -67,13 +102,13 @@ def generate_section(state: DocumentGenerationState) -> DocumentGenerationState:
     return {
         **state,
         "current_section_content": content,
-        # Reset feedback after usage so we don't apply it to the next section
         "feedback_notes": None, 
         "feedback_action": None
     }
 
 def process_approval(state: DocumentGenerationState) -> DocumentGenerationState:
     """Moves approved content to final document and advances index."""
+    # (This function remains unchanged from your previous code)
     print("--- Processing Approval ---")
     
     new_section = {

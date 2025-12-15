@@ -1,62 +1,50 @@
-# graph/document_graph.py
 from langgraph.graph import StateGraph, END
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.schemas import GraphState
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.nodes import ( apply_hitl_feedback,
-                                                                                    assemble_document,
-                                                                                    retrieve_context,
-                                                                                    start_document,
-                                                                                    load_next_section,
-                                                                                    build_prompt,
-                                                                                    generate_section,
-                                                                                    persist_draft,
-                                                                                    emit_hitl_event,
-                                                                                    wait_for_hitl,
-                                                                                    finalize_section,
-                                                                                    check_remaining_sections,
-                                                                                    export_document
-) 
-
-graph = StateGraph(GraphState)
-
-graph.add_node("start_document", start_document)
-graph.add_node("load_next_section", load_next_section)
-graph.add_node("retrieve_context", retrieve_context)
-graph.add_node("build_prompt", build_prompt)
-graph.add_node("generate_section", generate_section)
-graph.add_node("persist_draft", persist_draft)
-graph.add_node("emit_hitl_event", emit_hitl_event)
-graph.add_node("wait_for_hitl", wait_for_hitl)
-graph.add_node("apply_hitl_feedback", apply_hitl_feedback)
-graph.add_node("finalize_section", finalize_section)
-graph.add_node("check_remaining_sections", check_remaining_sections)
-graph.add_node("assemble_document", assemble_document)
-graph.add_node("export_document", export_document)
-
-graph.set_entry_point("start_document")
-
-graph.add_edge("start_document", "load_next_section")
-graph.add_edge("load_next_section", "retrieve_context")
-graph.add_edge("retrieve_context", "build_prompt")
-graph.add_edge("build_prompt", "generate_section")
-graph.add_edge("generate_section", "persist_draft")
-graph.add_edge("persist_draft", "emit_hitl_event")
-graph.add_edge("emit_hitl_event", "wait_for_hitl")
-
-# Resume after HITL
-graph.add_edge("wait_for_hitl", "apply_hitl_feedback")
-graph.add_edge("apply_hitl_feedback", "finalize_section")
-graph.add_edge("finalize_section", "check_remaining_sections")
-
-graph.add_conditional_edges(
-    "check_remaining_sections",
-    lambda state: "next" if state.current_section_index < len(state.sections) else "done",
-    {
-        "next": "load_next_section",
-        "done": "assemble_document"
-    }
+from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
+from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.nodes import (
+    initialize_document,
+    generate_section,
+    process_approval
 )
 
-graph.add_edge("assemble_document", "export_document")
-graph.add_edge("export_document", END)
+def create_doc_gen_graph():
+    workflow = StateGraph(DocumentGenerationState)
 
-document_graph = graph.compile()
+    # Add Nodes
+    workflow.add_node("init", initialize_document)
+    workflow.add_node("generate", generate_section)
+    workflow.add_node("save_approved", process_approval)
+
+    # --- Routing Logic ---
+    
+    # 1. Start -> Init
+    workflow.set_entry_point("init")
+
+    # 2. Init -> Generate
+    workflow.add_edge("init", "generate")
+
+    # 3. Logic Router (Manual Step Wrapper)
+    # We don't actually loop here for the demo. 
+    # The API calls specific functions, but to make the graph valid:
+    workflow.add_edge("save_approved", END)
+    workflow.add_edge("generate", END)
+
+    return workflow.compile()
+
+# For the demo, we often want to run specific "chunks" of logic.
+# However, standard LangGraph runs start to finish.
+# To achieve "Step-by-Step", we will rely on the State stored in SessionManager
+# and deciding which Node to simulate or if we just re-run the 'generate' node.
+
+# Helper to run just the generation step given a state
+async def run_generation_step(current_state: DocumentGenerationState):
+    # This acts as a mini-graph execution for just the generation node
+    # Since we are manually managing state, we can just call the node function directly
+    # or wrap it in a graph. For simplicity/reliability in demo:
+    return generate_section(current_state)
+
+async def run_approval_step(current_state: DocumentGenerationState):
+    return process_approval(current_state)
+
+async def run_init_step(current_state: DocumentGenerationState):
+    state_after_init = initialize_document(current_state)
+    return generate_section(state_after_init)

@@ -1,35 +1,16 @@
-# schemas/document.py
 from pydantic import BaseModel
-from typing import List, Optional, Literal, Dict
-from datetime import datetime
+from typing import List, Dict, Optional
 
-
-class CreateDocumentRequest(BaseModel):
+# schemas/graph_state.py
+class GraphState(BaseModel):
+    document_id: str
     project_id: str
     user_id: str
-    doc_type: Literal["srs", "mom", "tender", "boq"]
-    template_id: Optional[str] = None
 
+    sections: List[str]
+    current_section_index: int
 
-class CreateDocumentResponse(BaseModel):
-    document_id: str
-    status: str
+    section_drafts: Dict[str, str]
+    finalized_sections: Dict[str, str]
 
-
-class SectionResponse(BaseModel):
-    section_id: str
-    title: str
-    draft_text: str
-    revision: int
-    status: str
-
-# schemas/hitl.py
-class HITLFeedbackRequest(BaseModel):
-    document_id: str
-    section_id: str
-    user_id: str
-    accept: bool
-    edits: Optional[str] = None
-    comment: Optional[str] = None
-    revision: int
-    action: Literal["accept", "edit", "refine"]
+    hitl_feedback: Optional[Dict] = None

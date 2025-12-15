@@ -36,18 +36,45 @@ def generate_minutes_of_meeting(data: TranscriptInput):
     return markdown
 
 
+# @app.post("/generate-document", response_model=DemoSectionDraftResponse)
+# async def start_document_generation(request: DemoDocumentGenerationRequest):
+#     """
+#     Starts the process. Initializes the graph and generates Section 1.
+#     """
+#     # 1. Create Session
+#     doc_id = session_manager.create_session(request.meeting_minutes, request.project_id)
+#     session = session_manager.get_session(doc_id)
+    
+#     # 2. Run Init + First Generation
+#     # In a real LangGraph setup with checkpointers, we would stream events.
+#     # For this synchronous demo, we call the logic wrapper.
+#     new_state = await run_init_step(session)
+    
+#     # 3. Update Session
+#     session_manager.update_session(doc_id, new_state)
+    
+#     return DemoSectionDraftResponse(
+#         document_id=doc_id,
+#         section_title=new_state["sections_outline"][new_state["current_section_index"]],
+#         content=new_state["current_section_content"],
+#         is_complete=False
+#     )
+
 @app.post("/generate-document", response_model=DemoSectionDraftResponse)
 async def start_document_generation(request: DemoDocumentGenerationRequest):
     """
-    Starts the process. Initializes the graph and generates Section 1.
+    Starts the process. 
+    1. Creates Session ID.
+    2. Ingests minutes into Qdrant (inside run_init_step).
+    3. Generates Section 1.
     """
-    # 1. Create Session
+    # 1. Create Session (Allocates the UUID)
     doc_id = session_manager.create_session(request.meeting_minutes, request.project_id)
     session = session_manager.get_session(doc_id)
     
     # 2. Run Init + First Generation
-    # In a real LangGraph setup with checkpointers, we would stream events.
-    # For this synchronous demo, we call the logic wrapper.
+    # note: run_init_step calls 'initialize_document' which now performs Qdrant Ingestion
+    print(f"Starting generation for Doc ID: {doc_id}")
     new_state = await run_init_step(session)
     
     # 3. Update Session
