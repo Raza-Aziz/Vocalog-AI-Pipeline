@@ -19,6 +19,7 @@ langchain_text_splitters
 qdrant-client[fastembed]
 langchain-qdrant
 langchain_community
+langchain-huggingface
 
 # langchain-experimental>=0.3.4
 # docling>=2.54.0

@@ -1,5 +1,5 @@
 from typing import TypedDict, Optional
-from schema import MinutesOfMeeting
+from src.vocalog_ai_api.application.pipelines.mom_pipeline.schema import MinutesOfMeeting
 
 # ----State----
 class MoMGraphState(TypedDict):
