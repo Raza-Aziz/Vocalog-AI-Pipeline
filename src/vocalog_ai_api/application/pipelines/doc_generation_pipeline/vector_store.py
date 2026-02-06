@@ -1,73 +1,32 @@
-import os
 import uuid
-from typing import List
-from dotenv import load_dotenv
-
-# Qdrant & Sentence Transformers imports
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
-from sentence_transformers import SentenceTransformer 
+from typing import List, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from qdrant_client.http import models
 
-# Load environment variables from .env file
-load_dotenv()
-
-# --- Configuration ---
-COLLECTION_NAME = "meeting_transcripts"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-EMBEDDING_DIMENSION = 384 
-
-# Environment variables for Qdrant Cloud
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL_ENDPOINT")
-
-if not QDRANT_URL or not QDRANT_API_KEY:
-    raise ValueError("QDRANT_URL_ENDPOINT or QDRANT_API_KEY is missing from .env")
-
-# Initialize Client
-client = QdrantClient(
-    url=QDRANT_URL,
-    api_key=QDRANT_API_KEY
+# Import Centralized Infrastructure
+from vocalog_ai_api.infrastructure.vector_store.qdrant import (
+    ensure_collection_exists,
+    delete_session_vectors,
+    upsert_vectors,
+    embed_documents,
+    query_knowledge_base,
+    embed_text, # Used in retrieval if needed, though query_knowledge_base handles it
+    VectorPayload
 )
 
-# Initialize Embedding Model
-try:
-    embeddings_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    print(f"Loaded embedding model: {EMBEDDING_MODEL_NAME}")
-except Exception as e:
-    raise RuntimeError(f"Failed to load SentenceTransformer model: {e}")
-
-def ensure_collection_exists():
-    """
-    Checks if collection exists, creates it if not.
-    CRITICAL: Ensures a Payload Index exists for 'session_id' to allow filtering.
-    """
-    # 1. Create Collection if it doesn't exist
-    if not client.collection_exists(COLLECTION_NAME):
-        print(f"Collection '{COLLECTION_NAME}' not found. Creating...")
-        client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=models.VectorParams(
-                size=EMBEDDING_DIMENSION,
-                distance=models.Distance.COSINE
-            )
-        )
-    
-    # 2. Create Payload Index (FIXES THE 400 ERROR)
-    # We try to create this every time. Qdrant is smart enough to ignore it if it already exists.
-    client.create_payload_index(
-        collection_name=COLLECTION_NAME,
-        field_name="session_id",
-        field_schema=models.PayloadSchemaType.KEYWORD
-    )
-
+# TODO: Change Splitter to Semantic Chunking by langchain_experimental
 def ingest_minutes(session_id: str, text: str):
     """
-    Chunks, vectorizes, and stores in Qdrant with 'session_id' payload.
+    Chunks, vectorizes, and stores in the Unified Knowledge Base.
+    ENFORCES IDEMPOTENCY: Deletes old 'transcript' chunks for this session first.
     """
     ensure_collection_exists()
 
-    # 1. Chunk the text
+    # 1. IDEMPOTENCY: Delete existing transcript info for this session
+    # This ensures re-running generation doesn't duplicate data
+    delete_session_vectors(session_id=session_id, doc_type="transcript")
+
+    # 2. Chunk the text
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
@@ -79,60 +38,56 @@ def ingest_minutes(session_id: str, text: str):
         print("Warning: No chunks created from text.")
         return
 
-    # 2. Create Embeddings
-    print(f"Embedding {len(chunks)} chunks with {EMBEDDING_MODEL_NAME}...")
-    vectors = embeddings_model.encode(chunks, convert_to_numpy=True).tolist() 
+    # 3. Create Embeddings (Batch)
+    print(f"Embedding {len(chunks)} chunks...")
+    vectors = embed_documents(chunks)
 
-    # 3. Prepare Points
-    points = [
-        models.PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload={
-                "session_id": session_id,
-                "content": chunk,
-                "chunk_index": i
-            }
+    # 4. Prepare Points with Unified Schema
+    points = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        
+        # Construct strict payload
+        payload = VectorPayload(
+            session_id=session_id,
+            meeting_id=session_id, # Assuming 1:1 for now
+            doc_type="transcript",
+            chunk_type="srs_section", # Defaulting to general section for now, ideally 'transcript_chunk'
+            content=chunk,
+            section_id=None,
+            speaker=None,
+            timestamp=None,
+            chunk_index=i
         )
-        for i, (chunk, vector) in enumerate(zip(chunks, vectors))
-    ]
+        
+        points.append(
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload=payload
+            )
+        )
 
-    # 4. Upload to Qdrant
-    client.upsert(
-        collection_name=COLLECTION_NAME,
-        points=points
-    )
+    # 5. Upload to Centralized Knowledge Base
+    upsert_vectors(points)
     print(f"--- Vector Store: Indexed {len(points)} chunks for session {session_id} ---")
+
 
 def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
     """
     Searches for text relevant to 'query' within the specific 'session_id'.
     """
-    # Ensure collection and INDEX exist before searching
-    ensure_collection_exists()
-
-    # 1. Embed the query
-    query_vector = embeddings_model.encode(query, convert_to_numpy=True).tolist()
-
-    # 2. Search (Using query_points)
-    # The Payload Index created above allows this filter to work
-    search_result = client.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        query_filter=models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="session_id",
-                    match=models.MatchValue(value=session_id)
-                )
-            ]
-        ),
+    # 1. Search using Centralized Logic
+    results = query_knowledge_base(
+        query_text=query,
+        session_id=session_id,
+        doc_type="transcript", # We primarily want transcripts for context? Or maybe None for all? Defaulting to transcript for compatibility
         limit=limit
-    ).points
+    )
 
-    # 3. Format results
-    if not search_result:
+    # 2. Format results
+    if not results:
         return "No relevant context found in meeting minutes."
 
-    context_blocks = [hit.payload["content"] for hit in search_result]
+    # query_knowledge_base returns dicts with 'content' key
+    context_blocks = [r["content"] for r in results]
     return "\n\n---\n\n".join(context_blocks)

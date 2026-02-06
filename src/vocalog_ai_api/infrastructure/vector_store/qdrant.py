@@ -1,11 +1,11 @@
 import os
+import uuid
 import hashlib
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, TypedDict
 from dotenv import load_dotenv
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointStruct
 from langchain_huggingface import HuggingFaceEmbeddings
 
 load_dotenv()
@@ -15,109 +15,185 @@ QDRANT_URL = os.getenv("QDRANT_URL_ENDPOINT", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-# Collection Names
-MEETINGS_COLLECTION = "meetings_vectors"
-DOCUMENT_SECTIONS_COLLECTION = "document_sections_vectors"
+# Unified Collection Name
+VOCALOG_MAIN_COLLECTION = "vocalog_main"
 VECTOR_SIZE = 384  # Dimension for all-MiniLM-L6-v2
 
-# --- Initialization ---
-if QDRANT_API_KEY:
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-else:
-    client = QdrantClient(url=QDRANT_URL)
+# --- Type Definitions ---
+class VectorPayload(TypedDict):
+    """Schema Contract for Vocalog Knowledge Base"""
+    session_id: str         # UUID: The primary grouping key (tenant)
+    meeting_id: str         # UUID: Could be same as session_id or differ if multiple sessions map to one meeting
+    doc_type: str           # "transcript", "mom", "srs_section", "feedback"
+    chunk_type: str         # "speaker_turn", "topic", "section"
+    content: str            # The actual text content
+    section_id: Optional[str]   # Logical section name (e.g., "Architecture", "Discussion")
+    speaker: Optional[str]      # Speaker name if available
+    timestamp: Optional[float]  # For audio alignment
+    chunk_index: int            # For ordering
 
-# Initialize Embedding Model
-embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+# --- Singleton Client ---
+# Using a global variable for the client to ensure singleton pattern across imports
+_client_instance: Optional[QdrantClient] = None
+_embeddings_instance: Optional[HuggingFaceEmbeddings] = None
+
+def get_qdrant_client() -> QdrantClient:
+    global _client_instance
+    if _client_instance is None:
+        if QDRANT_API_KEY:
+            _client_instance = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        else:
+            _client_instance = QdrantClient(url=QDRANT_URL)
+    return _client_instance
+
+def get_embeddings_model() -> HuggingFaceEmbeddings:
+    global _embeddings_instance
+    if _embeddings_instance is None:
+        _embeddings_instance = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+    return _embeddings_instance
 
 
-def _ensure_collection_exists(collection_name: str):
-    """Ensures the collection exists before attempting operations."""
-    if not client.collection_exists(collection_name):
-        print(f"Creating collection: {collection_name}")
+# --- Core Operations ---
+
+def ensure_collection_exists():
+    """
+    Ensures the 'vocalog_main' collection exists with proper configuration.
+    Creates Payload Indexes for high-performance filtering.
+    """
+    client = get_qdrant_client()
+    
+    if not client.collection_exists(VOCALOG_MAIN_COLLECTION):
+        print(f"Creating Unified Collection: {VOCALOG_MAIN_COLLECTION}")
         client.create_collection(
-            collection_name=collection_name,
+            collection_name=VOCALOG_MAIN_COLLECTION,
             vectors_config=models.VectorParams(
                 size=VECTOR_SIZE,
                 distance=models.Distance.COSINE
             )
         )
 
-def _get_embedding(text: str) -> List[float]:
-    """Generate embedding for text using HuggingFace model."""
-    return embeddings.embed_query(text)
+    # Use session_id as the tenant key for physical grouping/sharding optimization
+    # (Note: In simple local Qdrant, this just ensures an index exists)
+    _create_index_if_not_exists(client, "session_id", models.PayloadSchemaType.KEYWORD)
+    _create_index_if_not_exists(client, "doc_type", models.PayloadSchemaType.KEYWORD)
+    _create_index_if_not_exists(client, "chunk_type", models.PayloadSchemaType.KEYWORD)
 
 
-def retrieve_meeting_context(project_id: str, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+def _create_index_if_not_exists(client: QdrantClient, field_name: str, schema_type: models.PayloadSchemaType):
+    """Helper to safely create payload indexes."""
+    try:
+        client.create_payload_index(
+            collection_name=VOCALOG_MAIN_COLLECTION,
+            field_name=field_name,
+            field_schema=schema_type
+        )
+    except Exception as e:
+        # Ignore if index already exists (Qdrant might raise 409 or similar)
+        # Printing for debug but not raising
+        pass
+
+
+def delete_session_vectors(session_id: str, doc_type: Optional[str] = None):
     """
-    Retrieve relevant meeting minutes context using the new query_points API.
+    Idempotency: Clears existing vectors for a session (and optionally a specific doc_type)
+    BEFORE ingesting new ones. This prevents duplication.
     """
-    _ensure_collection_exists(MEETINGS_COLLECTION)
-    query_vector = _get_embedding(query)
+    client = get_qdrant_client()
+    ensure_collection_exists() # Good practice to check existence
     
-    search_filter = Filter(
-        must=[
-            FieldCondition(
-                key="project_id",
-                match=MatchValue(value=project_id)
-            ),
-            FieldCondition(
-                key="document_type",
-                match=MatchValue(value="meeting_minutes")
+    must_filters = [
+        models.FieldCondition(
+            key="session_id",
+            match=models.MatchValue(value=session_id)
+        )
+    ]
+    
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(
+                key="doc_type",
+                match=models.MatchValue(value=doc_type)
             )
-        ]
+        )
+        
+    print(f"Clearing old vectors for session={session_id}, doc_type={doc_type or 'ALL'}")
+    client.delete(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        points_selector=models.FilterSelector(
+            filter=models.Filter(must=must_filters)
+        )
     )
+
+
+def upsert_vectors(points: List[models.PointStruct]):
+    """
+    Centralized upsert method.
+    """
+    client = get_qdrant_client()
+    client.upsert(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        points=points
+    )
+
+
+def embed_text(text: str) -> List[float]:
+    """
+    Centralized embedding generation.
+    """
+    model = get_embeddings_model()
+    return model.embed_query(text)
+
+def embed_documents(texts: List[str]) -> List[List[float]]:
+    """
+    Batch embedding generation.
+    """
+    model = get_embeddings_model()
+    return model.embed_documents(texts)
+
+
+# --- Retrieval ---
+
+def query_knowledge_base(
+    query_text: str,
+    session_id: str,
+    doc_type: Optional[str] = None,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Unified retrieval function.
+    """
+    client = get_qdrant_client()
+    ensure_collection_exists() # JIT check
     
-    # FIXED: Uses query_points instead of search
+    query_vector = embed_text(query_text)
+    
+    must_filters = [
+        models.FieldCondition(
+            key="session_id",
+            match=models.MatchValue(value=session_id)
+        )
+    ]
+    
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(
+                key="doc_type",
+                match=models.MatchValue(value=doc_type)
+            )
+        )
+        
     results = client.query_points(
-        collection_name=MEETINGS_COLLECTION,
+        collection_name=VOCALOG_MAIN_COLLECTION,
         query=query_vector,
-        query_filter=search_filter,
+        query_filter=models.Filter(must=must_filters),
         limit=limit
     ).points
     
     return [
         {
-            "text": r.payload.get("text", ""),
-            "meeting_id": r.payload.get("meeting_id"),
+            "content": r.payload.get("content", ""),
+            "metadata": r.payload,
             "score": r.score
         }
         for r in results
     ]
-
-
-def store_meeting_chunk(project_id: str, meeting_id: str, text: str):
-    """
-    Store a meeting minutes chunk in Qdrant.
-    """
-    _ensure_collection_exists(MEETINGS_COLLECTION)
-    embedding = _get_embedding(text)
-    
-    # Generate unique ID based on content hash to prevent duplicates
-    text_hash = hashlib.md5(text.encode()).hexdigest()
-    point_id = str(hashlib.uuid.uuid5(hashlib.uuid.NAMESPACE_DNS, f"{meeting_id}-{text_hash}"))
-    
-    client.upsert(
-        collection_name=MEETINGS_COLLECTION,
-        points=[
-            PointStruct(
-                id=point_id,
-                vector=embedding,
-                payload={
-                    "project_id": project_id,
-                    "meeting_id": meeting_id,
-                    "text": text,
-                    "document_type": "meeting_minutes"
-                }
-            )
-        ]
-    )
-    print(f"Stored chunk for meeting {meeting_id}")
-
-# Legacy adapter to support calls from older nodes.py code if needed
-def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
-    """Adapter for backward compatibility with nodes.py"""
-    # Assuming session_id acts as project_id for now
-    results = retrieve_meeting_context(project_id=session_id, query=query, limit=limit)
-    if not results:
-        return "No relevant context found."
-    return "\n\n---\n\n".join([r["text"] for r in results])
