@@ -28,7 +28,7 @@ class VectorPayload(TypedDict):
     chunk_type: str         # "speaker_turn", "topic", "section"
     content: str            # The actual text content
     section_id: Optional[str]   # Logical section name (e.g., "Architecture", "Discussion")
-    speaker: Optional[str]      # Speaker name if available
+    speakers: List[str]         # List of speakers found in this chunk
     timestamp: Optional[float]  # For audio alignment
     chunk_index: int            # For ordering
 
@@ -77,6 +77,7 @@ def ensure_collection_exists():
     _create_index_if_not_exists(client, "session_id", models.PayloadSchemaType.KEYWORD)
     _create_index_if_not_exists(client, "doc_type", models.PayloadSchemaType.KEYWORD)
     _create_index_if_not_exists(client, "chunk_type", models.PayloadSchemaType.KEYWORD)
+    _create_index_if_not_exists(client, "speakers", models.PayloadSchemaType.KEYWORD)
 
 
 def _create_index_if_not_exists(client: QdrantClient, field_name: str, schema_type: models.PayloadSchemaType):
