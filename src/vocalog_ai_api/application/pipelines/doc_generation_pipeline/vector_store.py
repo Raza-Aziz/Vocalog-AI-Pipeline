@@ -127,7 +127,8 @@ def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
         query_text=query,
         session_id=session_id,
         doc_type="transcript", # We primarily want transcripts for context? Or maybe None for all? Defaulting to transcript for compatibility
-        limit=limit
+        limit=limit,
+        enable_reranking=True # Enable Module 4 Reranking
     )
 
     # 2. Format results

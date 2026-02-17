@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import CrossEncoder
 
 load_dotenv()
 
@@ -14,6 +15,12 @@ load_dotenv()
 QDRANT_URL = os.getenv("QDRANT_URL_ENDPOINT", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+RERANKING_MODEL_NAME = os.getenv("RERANKING_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+# Reranking Configuration
+ENABLE_RERANKING = True
+RECALL_K = 20  # How many to fetch from Qdrant
+RERANK_K = 5   # How many to keep after reranking
 
 # Unified Collection Name
 VOCALOG_MAIN_COLLECTION = "vocalog_main"
@@ -36,6 +43,7 @@ class VectorPayload(TypedDict):
 # Using a global variable for the client to ensure singleton pattern across imports
 _client_instance: Optional[QdrantClient] = None
 _embeddings_instance: Optional[HuggingFaceEmbeddings] = None
+_reranker_instance: Optional[CrossEncoder] = None
 
 def get_qdrant_client() -> QdrantClient:
     global _client_instance
@@ -51,6 +59,14 @@ def get_embeddings_model() -> HuggingFaceEmbeddings:
     if _embeddings_instance is None:
         _embeddings_instance = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
     return _embeddings_instance
+
+def get_reranker_model() -> CrossEncoder:
+    """Singleton for the CrossEncoder model (approx 300MB RAM)."""
+    global _reranker_instance
+    if _reranker_instance is None:
+        print(f"Loading Reranker Model: {RERANKING_MODEL_NAME}")
+        _reranker_instance = CrossEncoder(RERANKING_MODEL_NAME)
+    return _reranker_instance
 
 
 # --- Core Operations ---
@@ -152,16 +168,47 @@ def embed_documents(texts: List[str]) -> List[List[float]]:
     return model.embed_documents(texts)
 
 
+def rerank_documents(query: str, documents: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Re-scores a list of documents against the query using CrossEncoder.
+    Returns the top-k documents sorted by relevance score.
+    """
+    if not documents:
+        return []
+
+    reranker = get_reranker_model()
+    
+    # CrossEncoder expects pairs of [Query, Document Text]
+    pairs = [[query, doc.get("content", "")] for doc in documents]
+    
+    try:
+        scores = reranker.predict(pairs)
+    except Exception as e:
+        print(f"Reranking Failed: {e}. Returning original order.")
+        return documents[:top_k]
+
+    # Attach scores to documents
+    for doc, score in zip(documents, scores):
+        doc["rerank_score"] = float(score)
+
+    # Sort by score descending
+    # Higher score = more relevant for CrossEncoder (usually logits or sigmoid)
+    sorted_docs = sorted(documents, key=lambda x: x["rerank_score"], reverse=True)
+    
+    return sorted_docs[:top_k]
+
+
 # --- Retrieval ---
 
 def query_knowledge_base(
     query_text: str,
     session_id: str,
     doc_type: Optional[str] = None,
-    limit: int = 5
+    limit: int = 5,
+    enable_reranking: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Unified retrieval function.
+    Unified retrieval function with optional 2-stage reranking.
     """
     client = get_qdrant_client()
     ensure_collection_exists() # JIT check
@@ -182,19 +229,35 @@ def query_knowledge_base(
                 match=models.MatchValue(value=doc_type)
             )
         )
+    
+    # Stage 1: Recall
+    # If reranking is ON, we fetch MORE candidates (RECALL_K)
+    # If OFF, we just fetch the user requested limit
+    fetch_limit = RECALL_K if enable_reranking else limit
         
     results = client.query_points(
         collection_name=VOCALOG_MAIN_COLLECTION,
         query=query_vector,
         query_filter=models.Filter(must=must_filters),
-        limit=limit
+        limit=fetch_limit
     ).points
     
-    return [
+    # Convert Qdrant PointStructs to simple dicts
+    candidate_docs = [
         {
             "content": r.payload.get("content", ""),
             "metadata": r.payload,
-            "score": r.score
+            "score": r.score, # Vector similarity score
+            "id": r.id
         }
         for r in results
     ]
+    
+    # Stage 2: Rerank (Optional)
+    if enable_reranking and candidate_docs:
+        final_docs = rerank_documents(query_text, candidate_docs, top_k=limit) # Return only requested 'limit'
+    else:
+        final_docs = candidate_docs[:limit]
+    
+    return final_docs
+
