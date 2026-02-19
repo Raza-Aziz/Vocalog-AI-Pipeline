@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "docling>=2.54.0",
     "fastapi>=0.117.1",
+    "fastembed>=0.7.4",
     "fastmcp>=2.12.3",
     "gunicorn>=23.0.0",
     "langchain>=0.3.27",
@@ -22,6 +23,7 @@ dependencies = [
     "pydantic>=2.11.9",
     "pymupdf>=1.26.4",
     "qdrant-client>=1.16.2",
+    "rank-bm25>=0.2.2",
     "requests>=2.32.5",
     "sentence-transformers>=5.1.1",
     "unstructured>=0.18.15",

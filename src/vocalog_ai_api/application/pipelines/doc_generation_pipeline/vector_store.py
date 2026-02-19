@@ -121,20 +121,22 @@ def ingest_minutes(session_id: str, input_data: str | dict):
 def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
     """
     Searches for text relevant to 'query' within the specific 'session_id'.
+    Uses HybridRetriever (Module 5): Vector + BM25 + RRF Fusion + Reranking.
     """
-    # 1. Search using Centralized Logic
-    results = query_knowledge_base(
-        query_text=query,
+    from vocalog_ai_api.application.pipelines.doc_generation_pipeline.hybrid_retriever import HybridRetriever
+
+    retriever = HybridRetriever(
         session_id=session_id,
-        doc_type="transcript", # We primarily want transcripts for context? Or maybe None for all? Defaulting to transcript for compatibility
-        limit=limit,
-        enable_reranking=True # Enable Module 4 Reranking
+        doc_type="transcript",
+        recall_k=20,
+        final_k=limit,
     )
 
-    # 2. Format results
+    results = retriever.retrieve(query, expand=True)
+
+    # Format results
     if not results:
         return "No relevant context found in meeting minutes."
 
-    # query_knowledge_base returns dicts with 'content' key
     context_blocks = [r["content"] for r in results]
     return "\n\n---\n\n".join(context_blocks)
