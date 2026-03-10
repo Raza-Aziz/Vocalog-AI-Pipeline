@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.nodes import (
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.nodes import (
     initialize_document,
     generate_section,
     process_approval

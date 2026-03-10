@@ -1,6 +1,6 @@
 from langgraph.graph import START, END, StateGraph
-from src.vocalog_ai_api.application.pipelines.mom_pipeline.state import MoMGraphState
-from src.vocalog_ai_api.application.pipelines.mom_pipeline.nodes import generate_markdown_mom, generate_mom
+from vocalog_ai_api.application.pipelines.mom_pipeline.state import MoMGraphState
+from vocalog_ai_api.application.pipelines.mom_pipeline.nodes import generate_markdown_mom, generate_mom
 
 builder = StateGraph(MoMGraphState)
 

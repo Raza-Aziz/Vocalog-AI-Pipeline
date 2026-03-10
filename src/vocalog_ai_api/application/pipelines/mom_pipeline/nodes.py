@@ -1,8 +1,8 @@
-from src.vocalog_ai_api.application.pipelines.mom_pipeline.state import MoMGraphState
-from src.vocalog_ai_api.application.pipelines.mom_pipeline.schema import MinutesOfMeeting
-from src.vocalog_ai_api.infrastructure.llm_providers.groq import llm
+from vocalog_ai_api.application.pipelines.mom_pipeline.state import MoMGraphState
+from vocalog_ai_api.application.pipelines.mom_pipeline.schema import MinutesOfMeeting
+from vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
-from src.vocalog_ai_api.domain.prompts.minutes_of_meeting import structured_mom_prompt, mom_markdown_instructions
+from vocalog_ai_api.domain.prompts.minutes_of_meeting import structured_mom_prompt, mom_markdown_instructions
 
 from langchain_core.messages import SystemMessage, HumanMessage
 

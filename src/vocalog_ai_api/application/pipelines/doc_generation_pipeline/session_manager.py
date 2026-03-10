@@ -1,6 +1,6 @@
 import uuid
 from typing import Dict, Optional
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
 
 class SessionManager:
     def __init__(self):
@@ -20,6 +20,7 @@ class SessionManager:
             "current_section_content": "",
             "feedback_action": None,
             "feedback_notes": None,
+            "refinement_history": {},
             "final_document": [],
             "is_complete": False
         }

@@ -5,7 +5,7 @@ Prompts for document generation, specifically for SRS (Software Requirements Spe
 Prompts for document generation
 Located in: src/vocalog_ai_api/domain/prompts/document_generation.py
 """
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.claude import SectionType
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.claude import SectionType
 
 
 def get_section_prompt(section_type: SectionType) -> str:

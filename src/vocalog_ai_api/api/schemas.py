@@ -69,7 +69,7 @@ class DemoDocumentGenerationRequest(BaseModel):
 
 class SectionFeedbackRequest(BaseModel):
     document_id: str
-    action: Literal["approve", "regenerate"]
+    action: Literal["approve", "regenerate", "refine"]
     feedback_notes: Optional[str] = None
 
 # --- Response Models ---
@@ -86,4 +86,5 @@ class DemoSectionDraftResponse(BaseModel):
     section_title: str
     content: str
     is_complete: bool = False
+    refinement_count: int = 0
     message: str = "Review the section draft."
