@@ -1,16 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from src.vocalog_ai_api.api.schemas import MoMResponse, TranscriptInput
-from src.vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
-from src.vocalog_ai_api.api.schemas import (
+from vocalog_ai_api.api.schemas import MoMResponse, TranscriptInput
+from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
+from vocalog_ai_api.api.schemas import (
     DemoDocumentGenerationRequest, 
     DemoSectionDraftResponse, 
     SectionFeedbackRequest,
     DemoDocumentStatusResponse
 )
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.session_manager import session_manager
-from src.vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import (
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.session_manager import session_manager
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import (
     run_init_step, 
     run_generation_step, 
     run_approval_step
@@ -119,28 +119,34 @@ async def provide_feedback(request: SectionFeedbackRequest):
                 document_id=doc_id,
                 section_title="Completed",
                 content="Document Generation Finished.",
-                is_complete=True
+                is_complete=True,
+                refinement_count=0
             )
             
         # 3. Generate NEXT section
         next_state = await run_generation_step(state_after_save)
         
-    elif request.action == "regenerate":
+    elif request.action in ["regenerate", "refine"]:
         # 1. Add feedback to state
         session["feedback_notes"] = request.feedback_notes
-        session["feedback_action"] = "regenerate"
         
-        # 2. Re-run generation on SAME section
+        # 2. Re-run generation on SAME section (HITL Refinement)
         next_state = await run_generation_step(session)
     
     # Update Store
     session_manager.update_session(doc_id, next_state)
     
+    # Calculate refinement count for the current section
+    history = next_state.get("refinement_history", {})
+    current_idx_str = str(next_state["current_section_index"])
+    ref_count = len(history.get(current_idx_str, []))
+    
     return DemoSectionDraftResponse(
         document_id=doc_id,
         section_title=next_state["sections_outline"][next_state["current_section_index"]],
         content=next_state["current_section_content"],
-        is_complete=False
+        is_complete=False,
+        refinement_count=ref_count
     )
 
 @app.get("/document-status/{document_id}", response_model=DemoDocumentStatusResponse)
