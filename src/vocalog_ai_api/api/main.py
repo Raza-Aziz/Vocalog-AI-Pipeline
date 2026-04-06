@@ -7,8 +7,12 @@ from vocalog_ai_api.api.schemas import (
     DemoDocumentGenerationRequest, 
     DemoSectionDraftResponse, 
     SectionFeedbackRequest,
-    DemoDocumentStatusResponse
+    DemoDocumentStatusResponse,
+    ActionItemsExtractRequest,
+    ActionItemsExtractResponse,
+    ActionItemsExecuteRequest
 )
+from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.session_manager import session_manager
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import (
     run_init_step, 
@@ -170,6 +174,35 @@ async def get_document_status(document_id: str):
         completed_sections=session["current_section_index"],
         total_sections=outline_len
     )
+
+# --- Action Items Pipeline Endpoints ---
+
+@app.post("/action-items/extract", response_model=ActionItemsExtractResponse)
+async def extract_action_items(request: ActionItemsExtractRequest):
+    """
+    Extracts action items (Assignee, Task, Deadline) from a given transcript.
+    Runs the independent Action Items LangGraph pipeline.
+    """
+    initial_state = {"transcript": request.transcript, "session_id": "api_call"}
+    # The nodes are synchronous, so we use invoke (or run them in a thread pool via LangGraph)
+    result_state = action_items_graph.invoke(initial_state)
+    return ActionItemsExtractResponse(actions=result_state.get("extracted_actions", []))
+
+from vocalog_ai_api.application.services.action_executor import execute_slack_actions as run_slack_executor
+
+@app.post("/action-items/execute/slack")
+async def execute_slack_actions(request: ActionItemsExecuteRequest):
+    """
+    Executes the given action items by sending them to Slack via MCP.
+    Connects to the @zencoderai/slack-mcp-server process.
+    """
+    
+    result = await run_slack_executor(actions=request.actions, channel_id=request.channel_id)
+    
+    return {
+        "message": f"Processed {len(request.actions)} actions.", 
+        "execution_result": result
+    }
 
 @app.get("/health")
 def health():

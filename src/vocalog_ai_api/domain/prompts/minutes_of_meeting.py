@@ -11,6 +11,7 @@ Follow these steps carefully:
 Rules:
 - Keep summaries short and factual.
 - Do not invent information or names.
+- Generate the meeting title from the context of the meeting transcript, as normal meeting info could be insufficient to generate a descriptive title.
 - If a section is missing, output an empty array for it.
 - Return only valid JSON — no explanations or extra text.
 '''
@@ -23,7 +24,9 @@ Convert it into a clean, professional Markdown document.
 
 Formatting Rules:
 - Follow standard Markdown syntax.
-- Each section (Meeting Info, Attendees, Agenda, Discussion Summary, Action Items) must begin with the correct heading using `#`, `##`, or `###`.
+- The title or topic of the meeting (which you must generate from the contextual info rather than relying solely on provided meeting info) MUST be the very first heading at the top of the document, using a single `#`.
+- The "Meeting Minutes" heading MUST be the second heading, and it MUST also use a single `#` (i.e. `# Meeting Minutes`).
+- Each subsequent section (Meeting Info, Attendees, Agenda, Discussion Summary, Action Items) must begin with the correct heading using `##` or `###`.
 - Use single blank lines between sections, but without `\n` or double `\\n\\n` or excessive spacing, just straight markdown format.
 - Attendees must be presented as a Markdown table under the Attendees heading.
 - Use a header row and separator row (| --- | --- |).

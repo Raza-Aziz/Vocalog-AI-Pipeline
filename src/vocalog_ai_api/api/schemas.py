@@ -59,6 +59,7 @@ class MoMResponse(BaseModel):
 
 from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
+from vocalog_ai_api.application.pipelines.action_items_pipeline.schema import ActionItem
 
 # --- Request Models ---
 
@@ -80,6 +81,16 @@ class DemoDocumentStatusResponse(BaseModel):
     current_section_title: Optional[str] = None
     completed_sections: int
     total_sections: int
+
+class ActionItemsExtractRequest(BaseModel):
+    transcript: str = Field(..., description="Transcript text to extract actions from.")
+
+class ActionItemsExtractResponse(BaseModel):
+    actions: List[ActionItem]
+
+class ActionItemsExecuteRequest(BaseModel):
+    actions: List[ActionItem] = Field(..., description="List of action items to execute via MCP.")
+    channel_id: str = Field(default="general", description="The Slack channel ID to send messages to.")
 
 class DemoSectionDraftResponse(BaseModel):
     document_id: str

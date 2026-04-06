@@ -2,7 +2,7 @@ from typing import TypedDict, Annotated, List, Optional
 from pydantic import BaseModel, Field
 
 class MeetingInfo(BaseModel):
-  title: str = Field(description='Title of the meeting.')
+  title: str = Field(description='Generate a descriptive title/topic for the meeting based entirely on the context and transcript, as normal meeting info might be insufficient.')
   date: str = Field(description='Date of the meeting, in YYYY-MM-DD')
   time: str = Field(description='Meeting start and end time')
   venue_or_platform: str = Field(description="Meeting location (Physical) or online platform")

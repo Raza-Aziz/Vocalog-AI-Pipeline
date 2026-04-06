@@ -1,0 +1,7 @@
+tunnel: f8af0649-4203-4957-8ba8-fa0732a1db16
+credentials-file: C:\Users\razak\.cloudflared\f8af0649-4203-4957-8ba8-fa0732a1db16.json
+
+ingress:
+  - hostname: ai.vocalog.app
+    service: http://localhost:8000
+  - service: http_status:404
