@@ -1,0 +1,294 @@
+{
+    "language_code": "en",
+    "language_probability": 1,
+    "text": "Hamza: We should also demonstrate action item extraction for the evaluation. Raza: Yes, especially how Vocalog pushes tasks directly to Jira. Shahzeb: And maybe show Slack notifications with deadlines and assignees clearly mentioned. Hamza: Good point. Raza, after the meeting, prepare a sample flow where a discussion turns into a Jira ticket automatically. Raza: Got it, I’ll set that up and share a demo link. Hamza: Shahzeb, you handle the Slack part—make sure the notification includes task owner, due date, and priority. Shahzeb: Sure, I’ll configure a clean notification template for that. Hamza: Also, we need a short recording for the evaluation. Someone should compile that. Raza: I can take care of the recording and stitching everything together. Hamza: Perfect. And someone needs to validate the extracted action items for accuracy before we present. Shahzeb: Yes sir, I’ll review and verify everything before the demo.",
+    "words": [
+        {
+            "text": "Hamza:",
+            "start": 15.0,
+            "end": 15.5,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 15.5,
+            "end": 15.55,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Good",
+            "start": 15.55,
+            "end": 15.8,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 15.8,
+            "end": 15.85,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "point.",
+            "start": 15.85,
+            "end": 16.2,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Raza,",
+            "start": 16.5,
+            "end": 16.9,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 16.9,
+            "end": 16.95,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "after",
+            "start": 16.95,
+            "end": 17.2,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 17.2,
+            "end": 17.25,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "the",
+            "start": 17.25,
+            "end": 17.4,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 17.4,
+            "end": 17.45,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "meeting,",
+            "start": 17.45,
+            "end": 17.8,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 17.8,
+            "end": 17.85,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "prepare",
+            "start": 17.85,
+            "end": 18.2,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Raza:",
+            "start": 19.0,
+            "end": 19.4,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": " ",
+            "start": 19.4,
+            "end": 19.45,
+            "type": "spacing",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "Got",
+            "start": 19.45,
+            "end": 19.7,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": " ",
+            "start": 19.7,
+            "end": 19.75,
+            "type": "spacing",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "it,",
+            "start": 19.75,
+            "end": 20.0,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "Hamza:",
+            "start": 21.0,
+            "end": 21.4,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 21.4,
+            "end": 21.45,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Shahzeb,",
+            "start": 21.45,
+            "end": 21.9,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Shahzeb:",
+            "start": 22.8,
+            "end": 23.2,
+            "type": "word",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": " ",
+            "start": 23.2,
+            "end": 23.25,
+            "type": "spacing",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": "Sure,",
+            "start": 23.25,
+            "end": 23.6,
+            "type": "word",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": "Hamza:",
+            "start": 24.5,
+            "end": 24.9,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 24.9,
+            "end": 24.95,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Also,",
+            "start": 24.95,
+            "end": 25.2,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Raza:",
+            "start": 26.0,
+            "end": 26.4,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": " ",
+            "start": 26.4,
+            "end": 26.45,
+            "type": "spacing",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "I",
+            "start": 26.45,
+            "end": 26.6,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": " ",
+            "start": 26.6,
+            "end": 26.65,
+            "type": "spacing",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "can",
+            "start": 26.65,
+            "end": 26.85,
+            "type": "word",
+            "speaker_id": "Raza"
+        },
+        {
+            "text": "Hamza:",
+            "start": 27.8,
+            "end": 28.2,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": " ",
+            "start": 28.2,
+            "end": 28.25,
+            "type": "spacing",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Perfect.",
+            "start": 28.25,
+            "end": 28.6,
+            "type": "word",
+            "speaker_id": "Hamza"
+        },
+        {
+            "text": "Shahzeb:",
+            "start": 29.5,
+            "end": 30.0,
+            "type": "word",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": " ",
+            "start": 30.0,
+            "end": 30.05,
+            "type": "spacing",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": "Yes",
+            "start": 30.05,
+            "end": 30.3,
+            "type": "word",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": " ",
+            "start": 30.3,
+            "end": 30.35,
+            "type": "spacing",
+            "speaker_id": "Shahzeb"
+        },
+        {
+            "text": "sir,",
+            "start": 30.35,
+            "end": 30.7,
+            "type": "word",
+            "speaker_id": "Shahzeb"
+        }
+    ]
+}

@@ -1,0 +1,403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --- Enums ---
+
+enum UserType {
+  INDIVIDUAL
+  ORGANIZATION
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+enum MeetingType {
+  ONLINE
+  PHYSICAL
+  HYBRID
+}
+
+enum MeetingPlatform {
+  MOBILE
+  VIRTUAL
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  RECORDED
+  PROCESSING
+  DRAFT_READY
+  FINALIZED
+  FAILED
+}
+
+enum DocumentType {
+  SRS
+  DESIGN_DOC
+  PRD
+  CUSTOM
+}
+
+enum DocumentStatus {
+  DRAFT
+  IN_PROGRESS
+  REVIEW
+  FINALIZED
+}
+
+enum ActionItemStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+enum ProjectMemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum VirtualMeetingProvider {
+  GOOGLE_MEET
+}
+
+enum VirtualMeetingSessionStatus {
+  JOINING
+  RECORDING
+  STOPPING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// --- Core Models ---
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  name            String?  @unique
+  supabaseId      String?  @unique
+  userType        UserType @default(INDIVIDUAL)
+  profileComplete Boolean  @default(false)
+  avatarUrl       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships     Membership[]
+  projectMembers  ProjectMember[]
+  meetings        MeetingParticipant[]
+  createdMeetings Meeting[]    @relation("userCreatedMeetings")
+  virtualMeetingSessions VirtualMeetingSession[] @relation("userStartedVirtualMeetings")
+  createdDocuments Document[]  @relation("userCreatedDocuments")
+  assignedActions  ActionItem[] @relation("assignedActions")
+  googleCalendarIntegration GoogleCalendarIntegration?
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  meta      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members            Membership[]
+  projects           Project[]
+  invites            Invite[]
+  orgRolePermissions OrgRolePermission[]
+}
+
+model Membership {
+  id             String         @id @default(uuid())
+  user           User           @relation(fields: [userId], references: [id])
+  userId         String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organizationId String
+  role           MembershipRole @default(MEMBER)
+  accepted       Boolean        @default(false)
+  invitedById    String?
+  createdAt      DateTime       @default(now())
+
+  @@unique([userId, organizationId])
+}
+
+model Invite {
+  id             String       @id @default(uuid())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId String
+  token          String       @unique
+  email          String?
+  createdById    String?
+  expiresAt      DateTime?
+  accepted       Boolean      @default(false)
+  acceptedById   String?
+  createdAt      DateTime     @default(now())
+}
+
+// --- Projects ---
+
+model Project {
+  id             String        @id @default(uuid())
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+  name           String
+  description    String?
+  templateKey    String?
+  meta           Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  roles     ProjectRole[]
+  members   ProjectMember[]
+  meetings  Meeting[]
+  virtualMeetingSessions VirtualMeetingSession[]
+  documents Document[]
+}
+
+model ProjectRole {
+  id          String                  @id @default(uuid())
+  project     Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  name        String
+  permissions ProjectRolePermission[]
+  createdAt   DateTime                @default(now())
+
+  projectMembers ProjectMember[]
+
+  @@unique([projectId, name])
+}
+
+model ProjectRolePermission {
+  id            String      @id @default(uuid())
+  projectRole   ProjectRole @relation(fields: [projectRoleId], references: [id])
+  projectRoleId String
+  permission    Permission  @relation(fields: [permissionId], references: [id])
+  permissionId  String
+
+  @@unique([projectRoleId, permissionId])
+}
+
+model ProjectMember {
+  id            String            @id @default(uuid())
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  user          User              @relation(fields: [userId], references: [id])
+  userId        String
+  role          ProjectMemberRole @default(MEMBER)
+  projectRoleId String?
+  projectRole   ProjectRole?      @relation(fields: [projectRoleId], references: [id])
+  joinedAt      DateTime          @default(now())
+
+  @@unique([projectId, userId])
+}
+
+// --- Meetings ---
+
+model Meeting {
+  id          String        @id @default(uuid())
+  title       String
+  ai_mom      String?       @db.Text
+  scheduledAt DateTime?
+  durationMin Int?
+  type        MeetingType   @default(ONLINE)
+  platform    MeetingPlatform @default(MOBILE)
+  status      MeetingStatus @default(SCHEDULED)
+  audioUrl    String?
+  transcript  String?       @db.Text
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  createdById String
+  createdBy   User          @relation("userCreatedMeetings", fields: [createdById], references: [id])
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deleted     Boolean       @default(false)
+
+  participants MeetingParticipant[]
+  minutes      MeetingMinutes?
+  actionItems  ActionItem[]
+  virtualMeetingSession VirtualMeetingSession?
+}
+
+model VirtualMeetingSession {
+  id                String                      @id @default(uuid())
+  provider          VirtualMeetingProvider     @default(GOOGLE_MEET)
+  meetingUrl        String
+  title             String?
+  topic             String?
+  logType           String                      @default("Meeting Minutes")
+  language          String                      @default("auto")
+  status            VirtualMeetingSessionStatus @default(JOINING)
+  participantNames  Json?
+  failureReason     String?
+  joinedAt          DateTime?
+  recordingStartedAt DateTime?
+  endRequestedAt    DateTime?
+  endedAt           DateTime?
+  project           Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId         String
+  startedBy         User                        @relation("userStartedVirtualMeetings", fields: [startedById], references: [id])
+  startedById       String
+  meeting           Meeting?                    @relation(fields: [meetingId], references: [id])
+  meetingId         String?                     @unique
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@index([projectId, status])
+}
+
+model MeetingParticipant {
+  id          String    @id @default(uuid())
+  meeting     Meeting   @relation(fields: [meetingId], references: [id])
+  meetingId   String
+  user        User?     @relation(fields: [userId], references: [id])
+  userId      String?
+  email       String?
+  displayName String?
+  isHost      Boolean   @default(false)
+  joinedAt    DateTime?
+  leftAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([meetingId])
+}
+
+model MeetingMinutes {
+  id               String   @id @default(uuid())
+  meeting          Meeting  @relation(fields: [meetingId], references: [id])
+  meetingId        String   @unique
+  agenda           Json?
+  attendees        Json?
+  discussionPoints Json?
+  summary          String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model ActionItem {
+  id          String           @id @default(uuid())
+  title       String
+  description String?
+  meeting     Meeting          @relation(fields: [meetingId], references: [id])
+  meetingId   String
+  assignee    User?            @relation("assignedActions", fields: [assigneeId], references: [id])
+  assigneeId  String?
+  status      ActionItemStatus @default(PENDING)
+  dueDate     DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+// --- Documents ---
+
+model Document {
+  id          String         @id @default(uuid())
+  title       String
+  content     String?        @db.Text
+  type        DocumentType   @default(CUSTOM)
+  status      DocumentStatus @default(DRAFT)
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  createdBy   User           @relation("userCreatedDocuments", fields: [createdById], references: [id])
+  createdById String
+  meta        Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+// --- Templates ---
+
+model ProjectTemplate {
+  id          String         @id @default(uuid())
+  key         String         @unique
+  name        String
+  description String?
+  meta        Json?
+  roles       TemplateRole[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model TemplateRole {
+  id          String                   @id @default(uuid())
+  template    ProjectTemplate          @relation(fields: [templateId], references: [id])
+  templateId  String
+  name        String
+  permissions TemplateRolePermission[]
+  createdAt   DateTime                 @default(now())
+
+  @@unique([templateId, name])
+}
+
+model TemplateRolePermission {
+  id             String       @id @default(uuid())
+  templateRole   TemplateRole @relation(fields: [templateRoleId], references: [id])
+  templateRoleId String
+  permission     Permission   @relation(fields: [permissionId], references: [id])
+  permissionId   String
+
+  @@unique([templateRoleId, permissionId])
+}
+
+// --- Permissions ---
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  projectRolePermissions  ProjectRolePermission[]
+  templateRolePermissions TemplateRolePermission[]
+  orgRolePermissions      OrgRolePermission[]
+}
+
+// --- Google Calendar Integration ---
+
+model GoogleCalendarIntegration {
+  id                    String    @id @default(uuid())
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                String    @unique
+  googleEmail           String
+  encryptedRefreshToken String
+  encryptedAccessToken  String?
+  tokenExpiry           DateTime?
+  calendarSyncEnabled   Boolean   @default(true)
+  defaultProjectId      String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  calendarEventSessions CalendarEventBotSession[]
+}
+
+model CalendarEventBotSession {
+  id                          String                    @id @default(uuid())
+  integration                 GoogleCalendarIntegration @relation(fields: [googleCalendarIntegrationId], references: [id], onDelete: Cascade)
+  googleCalendarIntegrationId String
+  googleEventId               String
+  virtualMeetingSessionId     String?
+  meetingStartTime            DateTime
+  createdAt                   DateTime                  @default(now())
+
+  @@unique([googleCalendarIntegrationId, googleEventId])
+}
+
+model OrgRolePermission {
+  id             String         @id @default(uuid())
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  organizationId String
+  role           MembershipRole
+  permission     Permission     @relation(fields: [permissionId], references: [id])
+  permissionId   String
+
+  @@unique([organizationId, role, permissionId])
+}

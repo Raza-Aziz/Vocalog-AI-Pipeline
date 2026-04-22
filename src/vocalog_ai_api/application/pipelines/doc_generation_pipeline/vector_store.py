@@ -6,11 +6,12 @@ from qdrant_client.http import models
 # Import Centralized Infrastructure
 from vocalog_ai_api.infrastructure.vector_store.qdrant import (
     ensure_collection_exists,
+    session_vectors_exist,
     delete_session_vectors,
     upsert_vectors,
     embed_documents,
     query_knowledge_base,
-    embed_text, # Used in retrieval if needed, though query_knowledge_base handles it
+    embed_text,
     VectorPayload
 )
 
@@ -25,6 +26,11 @@ def ingest_minutes(session_id: str, input_data: str | dict):
         input_data: Can be raw text string OR a JSON-like dict with word-level metadata.
     """
     ensure_collection_exists()
+
+    # Skip if vectors for this session already exist — avoids redundant embedding cost
+    if session_vectors_exist(session_id=session_id, doc_type="transcript"):
+        print(f"--- Vector Store: Skipping ingestion — transcript vectors already exist for session {session_id} ---")
+        return
 
     # 1. IDEMPOTENCY: Delete existing transcript info for this session
     # This ensures re-running generation doesn't duplicate data

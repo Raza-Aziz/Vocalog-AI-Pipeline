@@ -1,0 +1,7 @@
+{
+    "transcript": {
+        "text": "Hamza: We should also demonstrate action item extraction for the evaluation. Raza: Yes, especially how Vocalog pushes tasks directly to Jira. Shahzeb: And maybe show Slack notifications with deadlines and assignees clearly mentioned. Hamza: Good point. Raza, after the meeting, prepare a sample flow where a discussion turns into a Jira ticket automatically. Raza: Got it, I’ll set that up and share a demo link. Hamza: Shahzeb, you handle the Slack part—make sure the notification includes task owner, due date, and priority. Shahzeb: Sure, I’ll configure a clean notification template for that. Hamza: Also, we need a short recording for the evaluation. Someone should compile that. Raza: I can take care of the recording and stitching everything together. Hamza: Perfect. And someone needs to validate the extracted action items for accuracy before we present. Shahzeb: Yes sir, I’ll review and verify everything before the demo."
+    },
+    "user_id": "user-1",
+    "meeting_id": "meet-eval"
+}

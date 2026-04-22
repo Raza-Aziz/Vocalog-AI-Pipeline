@@ -110,6 +110,37 @@ def _create_index_if_not_exists(client: QdrantClient, field_name: str, schema_ty
         pass
 
 
+def session_vectors_exist(session_id: str, doc_type: Optional[str] = None) -> bool:
+    """
+    Returns True if at least one vector already exists for the given session_id
+    (and optionally doc_type). Used for skip-if-exists idempotency checks.
+    """
+    client = get_qdrant_client()
+    ensure_collection_exists()
+
+    must_filters = [
+        models.FieldCondition(
+            key="session_id",
+            match=models.MatchValue(value=session_id)
+        )
+    ]
+
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(
+                key="doc_type",
+                match=models.MatchValue(value=doc_type)
+            )
+        )
+
+    result = client.count(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        count_filter=models.Filter(must=must_filters),
+        exact=False,  # approximate is fast and sufficient for existence checks
+    )
+    return result.count > 0
+
+
 def delete_session_vectors(session_id: str, doc_type: Optional[str] = None):
     """
     Idempotency: Clears existing vectors for a session (and optionally a specific doc_type)

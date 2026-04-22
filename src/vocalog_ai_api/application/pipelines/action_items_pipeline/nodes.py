@@ -9,20 +9,21 @@ def extract_actions(state: ActionItemsState) -> dict:
     """
     transcript = state.get("transcript", "")
     
-    system_prompt = """You are an AI assistant designed to extract actionable items from meeting transcripts.
-Carefully review the following transcript and identify any tasks, action items, or follow-ups.
+    system_prompt = """You are an AI assistant specialized in extracting every actionable item from meeting transcripts.
+    
+Carefully read the ENTIRE transcript and identify ALL tasks, follow-ups, commitments, and responsibilities.
 
-For each action item, extract:
-1. 'assignee': The name or role of the person responsible for the task. If not explicitly assigned, use 'Unassigned'.
-2. 'task_description': A clear, concise description of what needs to be done.
-3. 'due_date': The deadline for the task, if mentioned in the transcript. Leave null if none is mentioned.
-4. 'target_platform': Set to 'slack' by default, unless the user specifically mentions creating a GitHub issue ('github') or sending an email ('gmail').
+For EACH action item, extract:
+1. 'assignee': The full name or role of the responsible person.
+2. 'task_description': A precise, self-contained description of the task.
+3. 'due_date': The deadline if mentioned.
+4. 'target_platform': 'slack', 'github', 'gmail', or 'unknown'.
 
-If there are no action items, simply return an empty list.
+You MUST return a valid JSON object with an 'actions' key containing a list of these items.
 """
     
-    # Configure LLM to force output to match the schema
-    structured_llm = llm.with_structured_output(ActionExtractionResult)
+    # Configure LLM to use JSON mode for better reliability on Groq
+    structured_llm = llm.with_structured_output(ActionExtractionResult, method="json_mode")
 
     messages = [
         SystemMessage(content=system_prompt),

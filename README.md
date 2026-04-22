@@ -41,7 +41,16 @@ The API is built with FastAPI. By default, it runs on **port 8000**.
 
 ### Start the Server
 Run the following command from the root of the project:
+
+**Bash / Linux / macOS:**
 ```bash
+export PYTHONPATH="src"
+uv run uvicorn vocalog_ai_api.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONPATH="src"
 uv run uvicorn vocalog_ai_api.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 - **API URL:** `http://localhost:8000`

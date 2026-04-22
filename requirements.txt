@@ -5,6 +5,7 @@ langchain>=0.3.27
 langchain-cerebras>=0.5.0
 langchain-groq>=0.3.8
 langgraph>=0.6.7
+langgraph-checkpoint-sqlite>=2.0.0
 mcp[cli]>=1.14.1
 neo4j>=5.28.2
 pinecone>=7.3.0

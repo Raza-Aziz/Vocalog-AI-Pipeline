@@ -1,16 +1,20 @@
+import uuid
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from vocalog_ai_api.api.schemas import MoMResponse, TranscriptInput
+from vocalog_ai_api.api.schemas import TranscriptInput
 from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
 from vocalog_ai_api.api.schemas import (
-    DemoDocumentGenerationRequest, 
-    DemoSectionDraftResponse, 
+    DemoDocumentGenerationRequest,
+    DemoSectionDraftResponse,
     SectionFeedbackRequest,
     DemoDocumentStatusResponse,
     ActionItemsExtractRequest,
     ActionItemsExtractResponse,
-    ActionItemsExecuteRequest
+    ActionItemsExecuteRequest,
+    ActionItemsForFrontendRequest,
+    ActionItemsForFrontendResponse,
 )
 from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.session_manager import session_manager
@@ -23,20 +27,20 @@ from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import (
 app = FastAPI(title="Vocalog AI - Document Generation Module", version="1.0.0")
 
 # @app.post("/generate-mom")
-@app.post(
-    "/generate-mom",response_class=PlainTextResponse)
+@app.post("/generate-mom", response_class=PlainTextResponse)
 def generate_minutes_of_meeting(data: TranscriptInput):
     """
     Generate standardized Minutes of Meeting from a transcript.
+    State is persisted to SQLite via the LangGraph checkpointer.
+    Provide user_id + meeting_id for a stable thread_id; a UUID is used as fallback.
     """
-    # 1. Run LangGraph pipeline
-    result_state = mom_graph.invoke({"raw_transcript": data.raw_transcript})
+    user_id = data.user_id or "anonymous"
+    session_suffix = data.session_id or data.meeting_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": f"{user_id}:{session_suffix}"}}
 
-    # 2. Extract Markdown output from state
-    markdown = result_state.get("mom_markdown", "")
-
-    # 3. Return Markdown response
-    return markdown
+    transcript_text = data.transcript.text
+    result_state = mom_graph.invoke({"raw_transcript": transcript_text}, config=config)
+    return result_state.get("mom_markdown", "")
 
 
 # @app.post("/generate-document", response_model=DemoSectionDraftResponse)
@@ -182,11 +186,40 @@ async def extract_action_items(request: ActionItemsExtractRequest):
     """
     Extracts action items (Assignee, Task, Deadline) from a given transcript.
     Runs the independent Action Items LangGraph pipeline.
+    State is persisted to SQLite; a fresh UUID thread_id is used per call.
     """
-    initial_state = {"transcript": request.transcript, "session_id": "api_call"}
-    # The nodes are synchronous, so we use invoke (or run them in a thread pool via LangGraph)
-    result_state = action_items_graph.invoke(initial_state)
+    user_id = request.user_id or "anonymous"
+    session_suffix = request.session_id or request.meeting_id or str(uuid.uuid4())
+    thread_id = f"{user_id}:{session_suffix}"
+    config = {"configurable": {"thread_id": thread_id}}
+    initial_state = {"transcript": request.transcript, "session_id": session_suffix}
+    result_state = action_items_graph.invoke(initial_state, config=config)
     return ActionItemsExtractResponse(actions=result_state.get("extracted_actions", []))
+
+
+@app.post("/action-items/extract-for-frontend", response_model=ActionItemsForFrontendResponse)
+async def extract_action_items_for_frontend(request: ActionItemsForFrontendRequest):
+    """
+    Extracts action items for direct frontend review and manual persistence.
+    No automatic Slack routing or side-effects — the caller decides what to do with the results.
+    Accepts optional session_id, meeting_id, and user_id for multi-session tracking.
+    """
+    user_id = request.user_id or "anonymous"
+    session_id = request.session_id or request.meeting_id or str(uuid.uuid4())
+    thread_id = f"{user_id}:{session_id}"
+    config = {"configurable": {"thread_id": thread_id}}
+    # Extract the plain-text field from the TranscriptData object
+    transcript_text = request.transcript.text
+    initial_state = {"transcript": transcript_text, "session_id": session_id}
+    result_state = action_items_graph.invoke(initial_state, config=config)
+    actions = result_state.get("extracted_actions", [])
+    return ActionItemsForFrontendResponse(
+        session_id=session_id,
+        meeting_id=request.meeting_id,
+        user_id=request.user_id,
+        actions=actions,
+        total_count=len(actions),
+    )
 
 from vocalog_ai_api.application.services.action_executor import execute_slack_actions as run_slack_executor
 
