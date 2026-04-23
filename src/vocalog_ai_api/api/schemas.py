@@ -82,17 +82,6 @@ class DemoSectionDraftResponse(BaseModel):
 
 # ── Action Items schemas ─────────────────────────────────────────────────────
 
-class ActionItemsExtractRequest(BaseModel):
-    transcript: str = Field(..., description="Transcript text to extract actions from.")
-    user_id: Optional[str] = Field(None, description="User ID — used as LangGraph thread_id prefix.")
-    session_id: Optional[str] = Field(None, description="Session ID — preferred thread_id suffix.")
-    meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback if session_id is absent.")
-
-
-class ActionItemsExtractResponse(BaseModel):
-    actions: List[ActionItem]
-
-
 class ActionItemsForFrontendRequest(BaseModel):
     transcript: TranscriptData = Field(
         ..., description="Transcript object from the Vocalog transcription pipeline."
@@ -112,9 +101,3 @@ class ActionItemsForFrontendResponse(BaseModel):
     actions: List[ActionItem]
     total_count: int = Field(description="Total number of extracted action items.")
 
-
-# ── Slack execution ──────────────────────────────────────────────────────────
-
-class ActionItemsExecuteRequest(BaseModel):
-    actions: List[ActionItem] = Field(..., description="Action items to execute via MCP.")
-    channel_id: str = Field(default="general", description="Slack channel ID.")

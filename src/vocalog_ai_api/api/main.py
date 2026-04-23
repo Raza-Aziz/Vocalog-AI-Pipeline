@@ -25,9 +25,6 @@ from vocalog_ai_api.api.schemas import (
     DemoSectionDraftResponse,
     SectionFeedbackRequest,
     DemoDocumentStatusResponse,
-    ActionItemsExtractRequest,
-    ActionItemsExtractResponse,
-    ActionItemsExecuteRequest,
     ActionItemsForFrontendRequest,
     ActionItemsForFrontendResponse,
 )
@@ -50,6 +47,10 @@ def generate_minutes_of_meeting(data: TranscriptInput):
     session_suffix = data.session_id or data.meeting_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": f"{user_id}:{session_suffix}"}}
     result = mom_graph.invoke({"raw_transcript": data.transcript.text}, config=config)
+    action_items_graph.invoke(
+        {"transcript": data.transcript.text, "session_id": session_suffix},
+        config=config,
+    )
     return result.get("mom_markdown", "")
 
 
@@ -206,22 +207,6 @@ async def get_document_status(document_id: str):
 
 # ── Action Items ─────────────────────────────────────────────────────────────
 
-@app.post("/action-items/extract", response_model=ActionItemsExtractResponse)
-async def extract_action_items(request: ActionItemsExtractRequest):
-    """
-    Extracts action items from a transcript.
-    State is persisted to SQLite; a UUID thread_id is used per call.
-    """
-    user_id = request.user_id or "anonymous"
-    session_suffix = request.session_id or request.meeting_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": f"{user_id}:{session_suffix}"}}
-    result = action_items_graph.invoke(
-        {"transcript": request.transcript, "session_id": session_suffix},
-        config=config,
-    )
-    return ActionItemsExtractResponse(actions=result.get("extracted_actions", []))
-
-
 @app.post("/action-items/extract-for-frontend", response_model=ActionItemsForFrontendResponse)
 async def extract_action_items_for_frontend(request: ActionItemsForFrontendRequest):
     """
@@ -243,15 +228,6 @@ async def extract_action_items_for_frontend(request: ActionItemsForFrontendReque
         total_count=len(actions),
     )
 
-
-from vocalog_ai_api.application.services.action_executor import execute_slack_actions as run_slack_executor
-
-
-@app.post("/action-items/execute/slack")
-async def execute_slack_actions(request: ActionItemsExecuteRequest):
-    """Execute action items via the MCP Slack integration."""
-    result = await run_slack_executor(actions=request.actions, channel_id=request.channel_id)
-    return {"message": f"Processed {len(request.actions)} actions.", "execution_result": result}
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
