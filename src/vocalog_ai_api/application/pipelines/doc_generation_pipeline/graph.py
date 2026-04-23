@@ -1,50 +1,99 @@
+"""
+Document Generation LangGraph pipeline with SQLite-backed persistence.
+
+Graph topology
+──────────────
+  START → init → generate ──[interrupt]──► (API reads/writes state)
+                    ▲                           │
+                    │  (refine/regenerate)       │ pending_action="approve"
+                    │                           ▼
+                    └──────────────── save_approved ──► END (if complete)
+                                                 │
+                                                 └──► generate (next section)
+
+Human-in-the-loop flow
+──────────────────────
+1. Client calls POST /generate-document  → graph runs init → generate, then
+   interrupts.  Checkpoint holds the current draft.
+2. Client calls POST /provide-feedback:
+   • "approve"     → API calls graph.update_state(pending_action="approve"),
+                      then graph.invoke(None, config).  Graph runs save_approved,
+                      then either ends or generates the next section (new interrupt).
+   • "refine"      → API injects feedback_notes + pending_action="refine" into
+                      the checkpoint, resumes.  Graph re-runs generate (same section).
+   • "regenerate"  → same as refine but with no specific feedback_notes.
+3. Repeat until is_complete=True.
+"""
+
 from langgraph.graph import StateGraph, END
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.nodes import (
     initialize_document,
     generate_section,
-    process_approval
+    process_approval,
 )
+from vocalog_ai_api.infrastructure.database.checkpointer import checkpointer as _default_checkpointer
 
-def create_doc_gen_graph():
+
+# ── Routing functions ────────────────────────────────────────────────────────
+
+def _route_after_generate(state: DocumentGenerationState) -> str:
+    """
+    Called on graph resume (after the interrupt that follows every generate run).
+    The API has already injected pending_action into the checkpoint before resuming.
+    """
+    action = state.get("pending_action")
+    if action == "approve":
+        return "save_approved"
+    # "refine", "regenerate", or None (first run before any human action)
+    return "generate"
+
+
+def _route_after_save(state: DocumentGenerationState) -> str:
+    if state.get("is_complete"):
+        return END
+    return "generate"
+
+
+# ── Graph assembly ───────────────────────────────────────────────────────────
+
+def create_doc_gen_graph(checkpointer=None):
+    """
+    Build and compile the document-generation graph.
+
+    Args:
+        checkpointer: Optional LangGraph checkpointer.  Pass a custom one
+                      (e.g. an in-memory SqliteSaver) for testing so that
+                      tests never touch the production database.
+                      Defaults to the shared application checkpointer.
+    """
+    _cp = checkpointer if checkpointer is not None else _default_checkpointer
+
     workflow = StateGraph(DocumentGenerationState)
 
-    # Add Nodes
     workflow.add_node("init", initialize_document)
     workflow.add_node("generate", generate_section)
     workflow.add_node("save_approved", process_approval)
 
-    # --- Routing Logic ---
-    
-    # 1. Start -> Init
     workflow.set_entry_point("init")
-
-    # 2. Init -> Generate
     workflow.add_edge("init", "generate")
 
-    # 3. Logic Router (Manual Step Wrapper)
-    # We don't actually loop here for the demo. 
-    # The API calls specific functions, but to make the graph valid:
-    workflow.add_edge("save_approved", END)
-    workflow.add_edge("generate", END)
+    workflow.add_conditional_edges(
+        "generate",
+        _route_after_generate,
+        {"save_approved": "save_approved", "generate": "generate"},
+    )
+    workflow.add_conditional_edges(
+        "save_approved",
+        _route_after_save,
+        {"generate": "generate", END: END},
+    )
 
-    return workflow.compile()
+    return workflow.compile(
+        checkpointer=_cp,
+        interrupt_after=["generate"],   # pause after every draft for human review
+    )
 
-# For the demo, we often want to run specific "chunks" of logic.
-# However, standard LangGraph runs start to finish.
-# To achieve "Step-by-Step", we will rely on the State stored in SessionManager
-# and deciding which Node to simulate or if we just re-run the 'generate' node.
 
-# Helper to run just the generation step given a state
-async def run_generation_step(current_state: DocumentGenerationState):
-    # This acts as a mini-graph execution for just the generation node
-    # Since we are manually managing state, we can just call the node function directly
-    # or wrap it in a graph. For simplicity/reliability in demo:
-    return generate_section(current_state)
-
-async def run_approval_step(current_state: DocumentGenerationState):
-    return process_approval(current_state)
-
-async def run_init_step(current_state: DocumentGenerationState):
-    state_after_init = initialize_document(current_state)
-    return generate_section(state_after_init)
+# Module-level singleton — import this in the API layer
+doc_gen_graph = create_doc_gen_graph()

@@ -1,168 +1,157 @@
-import time
-from langchain_core.messages import SystemMessage, HumanMessage
-# from langchain_openai import ChatOpenAI
-from vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
+"""
+Document Generation pipeline nodes.
 
-# --- NEW IMPORTS ---
+Each node is a pure function: DocumentGenerationState → dict (partial state update).
+LangGraph merges the returned dict into the persisted checkpoint.
+
+Strategy injection (Task 5 — Dynamic Persona):
+  Every node that calls the LLM resolves the active DocumentStrategy from the
+  state's `document_type` field.  This means:
+  • The section outline is always strategy-specific (not hardcoded).
+  • Initial draft prompts inject the strategy's persona + section focus.
+  • Refinement prompts use the strategy's refinement persona.
+"""
+
+from langchain_core.messages import HumanMessage
+
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.state import DocumentGenerationState
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.vector_store import (
     ingest_minutes,
-    retrieve_context
+    retrieve_context,
 )
-
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.strategies import get_strategy
 from vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
-# Toggle this for real LLM vs Fast Demo
-MOCK_MODE = False  # Set to False to test real Qdrant + OpenAI interaction
 
-# llm = ChatOpenAI(model="gpt-4o", temperature=0.7) if not MOCK_MODE else None
+def initialize_document(state: DocumentGenerationState) -> dict:
+    """
+    1. Ingests raw meeting minutes into the Qdrant vector store (idempotent).
+    2. Resolves the document strategy and creates the section outline.
 
-def initialize_document(state: DocumentGenerationState) -> DocumentGenerationState:
+    The outline is determined entirely by the chosen strategy — no hardcoded
+    section lists exist in this file.
     """
-    1. Ingests raw minutes into Qdrant Vector Store.
-    2. Creates the SRS outline.
-    """
-    print("--- Initializing Document & Vectorizing Data ---")
-    
-    session_id = state["session_id"]
+    print(f"--- Initializing Document (type={state['document_type']}) ---")
+
+    session_id = state["thread_id"]
     raw_minutes = state["meeting_minutes"]
+    strategy = get_strategy(state["document_type"])
 
-    # --- STEP 1: Vector Ingestion ---
-    # We only want to do this once. In a real app, you might check if it already exists.
     try:
         ingest_minutes(session_id, raw_minutes)
-        print(f"Successfully vectorized minutes for Session: {session_id}")
-    except Exception as e:
-        print(f"Error during vectorization: {e}")
-        # In production, you might raise an error or handle gracefully
-        
-    # --- STEP 2: Create Outline ---
-    outline = [
-        "1. Introduction",
-        "2. Meeting Attendees & Roles",
-        "3. Functional Requirements",
-        "4. Action Items & Timeline"
-    ]
-    
+        print(f"Vectorised minutes for thread: {session_id}")
+    except Exception as exc:
+        print(f"Vectorisation error (non-fatal): {exc}")
+
     return {
-        **state,
-        "sections_outline": outline,
+        "sections_outline": strategy.sections,
         "current_section_index": 0,
-        "is_complete": False
+        "final_document": [],
+        "refinement_history": {},
+        "is_complete": False,
+        "pending_action": None,
+        "feedback_notes": None,
+        "current_section_content": "",
     }
 
-def generate_section(state: DocumentGenerationState) -> DocumentGenerationState:
+
+def generate_section(state: DocumentGenerationState) -> dict:
     """
-    Generates content using RAG:
-    1. Retrieves relevant chunks from Qdrant based on section title.
-    2. Feeds those chunks to LLM.
-    3. If feedback is present, treats this as a refinement step.
+    Generates (or refines) the current section draft using RAG + strategy-aware LLM prompt.
+
+    On an initial call  : builds an initial-draft prompt via strategy.build_initial_prompt().
+    On a refine call    : builds a refinement prompt via strategy.build_refinement_prompt()
+                          and records the previous draft + feedback in refinement_history.
+    On a regenerate call: re-runs initial-draft logic (fresh attempt, no feedback injected).
+
+    After generation the node clears pending_action and feedback_notes so the graph
+    re-enters a clean interrupt state waiting for the next human decision.
     """
     current_idx = state["current_section_index"]
     sections = state["sections_outline"]
-    
+
     if current_idx >= len(sections):
-        return {**state, "is_complete": True}
+        return {"is_complete": True}
 
     section_title = sections[current_idx]
-    session_id = state["session_id"]
+    session_id = state["thread_id"]
     feedback = state.get("feedback_notes")
-    history = state.get("refinement_history", {})
-    
-    # Track history if we are refining
-    if feedback and state.get("current_section_content"):
+    action = state.get("pending_action")
+    history: dict = dict(state.get("refinement_history") or {})
+    strategy = get_strategy(state["document_type"])
+
+    print(
+        f"--- Generating section '{section_title}' "
+        f"[{state['document_type'].upper()}] action={action or 'initial'} ---"
+    )
+
+    # RAG retrieval — query by section title for relevance
+    relevant_context = retrieve_context(session_id, query=section_title, limit=4)
+    print(f"Context retrieved: {len(relevant_context)} chars")
+
+    is_refinement = action == "refine" and feedback and state.get("current_section_content")
+
+    # Record the outgoing draft + feedback in history before overwriting
+    if is_refinement:
         str_idx = str(current_idx)
         if str_idx not in history:
             history[str_idx] = []
-        history[str_idx].append({
-            "draft": state["current_section_content"],
-            "feedback": feedback
-        })
-    
-    print(f"--- Generating Section: {section_title} (Refinement: {bool(feedback)}) ---")
+        history[str_idx].append(
+            {"draft": state["current_section_content"], "feedback": feedback}
+        )
 
-    # --- STEP 3: RAG Retrieval ---
-    relevant_context = retrieve_context(session_id, query=section_title, limit=4)
-    
-    print(f"Context Retrieved: {len(relevant_context)} chars")
-
-    # --- STEP 4: Construct Prompt ---
-    if feedback:
-        # --- REFINEMENT PROMPT ---
-        prompt = f"""
-        You are refining a section for a Software Requirements Specification (SRS).
-        
-        Section Title: '{section_title}'
-        
-        Previous Draft:
-        {state.get("current_section_content")}
-        
-        User Feedback:
-        {feedback}
-        
-        Source Context (Reference for facts):
-        {relevant_context}
-        
-        Task: 
-        Generate a NEW draft of this section that specifically addresses the user feedback. 
-        Ensure you keep the relevant facts from the source context but adjust the tone, 
-        structure, or detail as requested by the user.
-        """
+    # Build prompt via strategy (Task 5 — dynamic persona injection)
+    if is_refinement:
+        prompt = strategy.build_refinement_prompt(
+            section_title=section_title,
+            current_draft=state["current_section_content"],
+            feedback=feedback,
+            context=relevant_context,
+        )
     else:
-        # --- INITIAL DRAFT PROMPT ---
-        prompt = f"""
-        You are an expert Technical Writer creating a Software Requirements Specification (SRS).
-        
-        Task: Write the content for the section: '{section_title}'.
-        
-        Reference Context (Use ONLY this information to write the section):
-        {relevant_context}
-        
-        If the context does not contain enough information for this specific section, 
-        write a placeholder stating what is missing, but do not hallucinate facts.
-        """
+        prompt = strategy.build_initial_prompt(
+            section_title=section_title,
+            context=relevant_context,
+        )
 
-    content = ""
-    if MOCK_MODE:
-        time.sleep(1)
-        content = f"### {section_title}\n\n[Refined via Feedback]\nOriginal: {state.get('current_section_content')[:30]}...\nFeedback: {feedback}\nContent..." if feedback else f"### {section_title}\n\n[Generated via RAG]\nContext used: {relevant_context[:50]}...\nContent..."
-    else:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content
+    response = llm.invoke([HumanMessage(content=prompt)])
+    content = response.content
 
     return {
-        **state,
         "current_section_content": content,
-        "feedback_notes": None, 
-        "feedback_action": None,
-        "refinement_history": history
+        "refinement_history": history,
+        # Clear HITL fields — graph re-interrupts; API sets them again before next resume
+        "pending_action": None,
+        "feedback_notes": None,
     }
 
-def process_approval(state: DocumentGenerationState) -> DocumentGenerationState:
-    """Moves approved content to final document and advances index."""
+
+def process_approval(state: DocumentGenerationState) -> dict:
+    """
+    Moves the approved section to final_document, advances the section pointer,
+    and determines whether the document is now complete.
+    """
     print("--- Processing Approval ---")
-    
-    new_section = {
+
+    approved_section = {
         "title": state["sections_outline"][state["current_section_index"]],
-        "content": state["current_section_content"]
+        "content": state["current_section_content"],
     }
-    
-    updated_doc = state["final_document"] + [new_section]
+    updated_doc = list(state["final_document"]) + [approved_section]
     next_index = state["current_section_index"] + 1
-    
-    # Clean up transient state for the section we just finished
-    history = state.get("refinement_history", {})
-    str_idx = str(state["current_section_index"])
-    if str_idx in history:
-        del history[str_idx]
+
+    # Drop the completed section's refinement history (keep memory lean)
+    history = dict(state.get("refinement_history") or {})
+    history.pop(str(state["current_section_index"]), None)
 
     is_done = next_index >= len(state["sections_outline"])
-    
+
     return {
-        **state,
         "final_document": updated_doc,
         "current_section_index": next_index,
+        "current_section_content": "",
+        "pending_action": None,
         "feedback_notes": None,
-        "feedback_action": None,
         "refinement_history": history,
-        "is_complete": is_done
+        "is_complete": is_done,
     }

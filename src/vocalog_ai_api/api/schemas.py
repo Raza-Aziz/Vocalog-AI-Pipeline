@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from vocalog_ai_api.application.pipelines.action_items_pipeline.schema import ActionItem
 
 
-# --- Transcript JSON format (matches the Vocalog transcription output) ---
+# ── Transcript format (matches Vocalog transcription output) ─────────────────
 
 class TranscriptWord(BaseModel):
     text: str
@@ -12,6 +12,7 @@ class TranscriptWord(BaseModel):
     type: Optional[str] = None
     speaker_id: Optional[str] = None
 
+
 class TranscriptData(BaseModel):
     text: str = Field(..., description="Full transcript text as a single string.")
     language_code: Optional[str] = None
@@ -19,38 +20,59 @@ class TranscriptData(BaseModel):
     words: Optional[List[TranscriptWord]] = None
 
 
-# --- MoM Endpoint Schemas ---
+# ── MoM endpoint schemas ─────────────────────────────────────────────────────
 
 class TranscriptInput(BaseModel):
-    transcript: TranscriptData = Field(..., description="Transcript object from the Vocalog transcription pipeline.")
+    transcript: TranscriptData = Field(
+        ..., description="Transcript object from the Vocalog transcription pipeline."
+    )
     user_id: Optional[str] = Field(None, description="User ID — used as LangGraph thread_id prefix.")
     session_id: Optional[str] = Field(None, description="Session ID — preferred thread_id suffix.")
-    meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback thread_id suffix if session_id is absent.")
+    meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback if session_id is absent.")
+
 
 class MoMResponse(BaseModel):
     markdown: str
 
 
-# --- Document Generation Schemas ---
+# ── Document Generation schemas ──────────────────────────────────────────────
 
 class DemoDocumentGenerationRequest(BaseModel):
-    meeting_minutes: str = Field(..., description="Raw meeting minutes text")
-    project_id: str = Field(default="demo-project", description="Project Identifier")
+    meeting_minutes: str = Field(..., description="Raw meeting minutes text.")
+    project_id: str = Field(default="demo-project", description="Project identifier.")
+    document_type: Literal["srs", "prd", "sdd"] = Field(
+        default="srs",
+        description=(
+            "Document type to generate. "
+            "'srs' = Software Requirements Specification, "
+            "'prd' = Product Requirements Document, "
+            "'sdd' = Software Design Document."
+        ),
+    )
+
 
 class SectionFeedbackRequest(BaseModel):
-    document_id: str
+    document_id: str = Field(
+        ..., description="Thread ID returned by /generate-document (permanent session key)."
+    )
     action: Literal["approve", "regenerate", "refine"]
-    feedback_notes: Optional[str] = None
+    feedback_notes: Optional[str] = Field(
+        None, description="Required when action='refine'. Ignored otherwise."
+    )
+
 
 class DemoDocumentStatusResponse(BaseModel):
     document_id: str
+    document_type: str
     status: Literal["in_progress", "completed", "error"]
     current_section_title: Optional[str] = None
     completed_sections: int
     total_sections: int
 
+
 class DemoSectionDraftResponse(BaseModel):
     document_id: str
+    document_type: str
     section_title: str
     content: str
     is_complete: bool = False
@@ -58,36 +80,41 @@ class DemoSectionDraftResponse(BaseModel):
     message: str = "Review the section draft."
 
 
-# --- Action Items Schemas ---
+# ── Action Items schemas ─────────────────────────────────────────────────────
 
 class ActionItemsExtractRequest(BaseModel):
     transcript: str = Field(..., description="Transcript text to extract actions from.")
     user_id: Optional[str] = Field(None, description="User ID — used as LangGraph thread_id prefix.")
     session_id: Optional[str] = Field(None, description="Session ID — preferred thread_id suffix.")
-    meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback thread_id suffix if session_id is absent.")
+    meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback if session_id is absent.")
+
 
 class ActionItemsExtractResponse(BaseModel):
     actions: List[ActionItem]
 
+
 class ActionItemsForFrontendRequest(BaseModel):
-    transcript: TranscriptData = Field(..., description="Transcript object from the Vocalog transcription pipeline.")
+    transcript: TranscriptData = Field(
+        ..., description="Transcript object from the Vocalog transcription pipeline."
+    )
     session_id: Optional[str] = Field(
         None,
         description="Optional session ID linking to a meeting or user session. Auto-generated UUID if omitted.",
     )
-    meeting_id: Optional[str] = Field(None, description="Optional meeting ID — fallback thread_id suffix if session_id is absent.")
+    meeting_id: Optional[str] = Field(None, description="Optional meeting ID — fallback thread_id suffix.")
     user_id: Optional[str] = Field(None, description="Optional user ID for context.")
 
+
 class ActionItemsForFrontendResponse(BaseModel):
-    session_id: str = Field(description="Session ID for this extraction (use in subsequent requests).")
-    meeting_id: Optional[str] = Field(None)
-    user_id: Optional[str] = Field(None)
+    session_id: str = Field(description="Session ID for this extraction.")
+    meeting_id: Optional[str] = None
+    user_id: Optional[str] = None
     actions: List[ActionItem]
     total_count: int = Field(description="Total number of extracted action items.")
 
 
-# --- Slack Execution ---
+# ── Slack execution ──────────────────────────────────────────────────────────
 
 class ActionItemsExecuteRequest(BaseModel):
-    actions: List[ActionItem] = Field(..., description="List of action items to execute via MCP.")
-    channel_id: str = Field(default="general", description="The Slack channel ID to send messages to.")
+    actions: List[ActionItem] = Field(..., description="Action items to execute via MCP.")
+    channel_id: str = Field(default="general", description="Slack channel ID.")
