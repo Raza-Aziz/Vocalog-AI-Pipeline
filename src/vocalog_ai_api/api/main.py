@@ -17,10 +17,10 @@ Human-in-the-loop cycle (POST /generate-document → POST /provide-feedback loop
 import uuid
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
 
 from vocalog_ai_api.api.schemas import (
     TranscriptInput,
+    MoMAndActionsResponse,
     DemoDocumentGenerationRequest,
     DemoSectionDraftResponse,
     SectionFeedbackRequest,
@@ -37,21 +37,26 @@ app = FastAPI(title="Vocalog AI — Document Generation Module", version="2.0.0"
 
 # ── Minutes of Meeting ───────────────────────────────────────────────────────
 
-@app.post("/generate-mom", response_class=PlainTextResponse)
+@app.post("/generate-mom", response_model=MoMAndActionsResponse)
 def generate_minutes_of_meeting(data: TranscriptInput):
     """
-    Generate standardised Minutes of Meeting from a transcript.
-    State is persisted to SQLite via the LangGraph checkpointer.
+    Generate Minutes of Meeting and extract action items from a transcript.
+    Both graphs share the same thread_id so all outputs land in one SQLite session.
     """
     user_id = data.user_id or "anonymous"
     session_suffix = data.session_id or data.meeting_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": f"{user_id}:{session_suffix}"}}
-    result = mom_graph.invoke({"raw_transcript": data.transcript.text}, config=config)
-    action_items_graph.invoke(
+    mom_result = mom_graph.invoke({"raw_transcript": data.transcript.text}, config=config)
+    ai_result = action_items_graph.invoke(
         {"transcript": data.transcript.text, "session_id": session_suffix},
         config=config,
     )
-    return result.get("mom_markdown", "")
+    actions = ai_result.get("extracted_actions", [])
+    return MoMAndActionsResponse(
+        meeting_minutes=mom_result.get("mom_markdown", ""),
+        action_items=actions,
+        total_count=len(actions),
+    )
 
 
 # ── Document Generation (persistence-first HITL) ─────────────────────────────
@@ -220,13 +225,7 @@ async def extract_action_items_for_frontend(request: ActionItemsForFrontendReque
         config=config,
     )
     actions = result.get("extracted_actions", [])
-    return ActionItemsForFrontendResponse(
-        session_id=session_id,
-        meeting_id=request.meeting_id,
-        user_id=request.user_id,
-        actions=actions,
-        total_count=len(actions),
-    )
+    return ActionItemsForFrontendResponse(actions=actions, total_count=len(actions))
 
 
 

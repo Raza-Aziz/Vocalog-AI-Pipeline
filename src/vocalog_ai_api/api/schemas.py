@@ -31,8 +31,10 @@ class TranscriptInput(BaseModel):
     meeting_id: Optional[str] = Field(None, description="Meeting ID — fallback if session_id is absent.")
 
 
-class MoMResponse(BaseModel):
-    markdown: str
+class MoMAndActionsResponse(BaseModel):
+    meeting_minutes: str = Field(..., description="Generated Minutes of Meeting in Markdown.")
+    action_items: List[ActionItem] = Field(default_factory=list, description="Extracted action items.")
+    total_count: int = Field(..., description="Number of extracted action items.")
 
 
 # ── Document Generation schemas ──────────────────────────────────────────────
@@ -95,9 +97,6 @@ class ActionItemsForFrontendRequest(BaseModel):
 
 
 class ActionItemsForFrontendResponse(BaseModel):
-    session_id: str = Field(description="Session ID for this extraction.")
-    meeting_id: Optional[str] = None
-    user_id: Optional[str] = None
     actions: List[ActionItem]
     total_count: int = Field(description="Total number of extracted action items.")
 
