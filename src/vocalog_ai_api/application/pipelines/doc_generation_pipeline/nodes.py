@@ -25,23 +25,25 @@ from vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
 def initialize_document(state: DocumentGenerationState) -> dict:
     """
-    1. Ingests raw meeting minutes into the Qdrant vector store (idempotent).
+    1. Ingests all meeting sources into the project-level Qdrant knowledge base.
     2. Resolves the document strategy and creates the section outline.
 
-    The outline is determined entirely by the chosen strategy — no hardcoded
-    section lists exist in this file.
+    Each source is ingested independently under its own meeting_id so individual
+    meetings can be updated without affecting the rest of the project history.
     """
-    print(f"--- Initializing Document (type={state['document_type']}) ---")
-
-    session_id = state["thread_id"]
-    raw_minutes = state["meeting_minutes"]
+    project_id = state["project_id"]
+    sources = state["meeting_sources"]
     strategy = get_strategy(state["document_type"])
 
-    try:
-        ingest_minutes(session_id, raw_minutes)
-        print(f"Vectorised minutes for thread: {session_id}")
-    except Exception as exc:
-        print(f"Vectorisation error (non-fatal): {exc}")
+    print(f"--- Initializing Document (type={state['document_type']}, project={project_id}, meetings={len(sources)}) ---")
+
+    for source in sources:
+        ingest_minutes(
+            project_id=project_id,
+            meeting_id=source["meeting_id"],
+            input_data=source["content"],
+        )
+    print(f"Vectorised {len(sources)} meeting(s) for project: {project_id}")
 
     return {
         "sections_outline": strategy.sections,
@@ -74,7 +76,6 @@ def generate_section(state: DocumentGenerationState) -> dict:
         return {"is_complete": True}
 
     section_title = sections[current_idx]
-    session_id = state["thread_id"]
     feedback = state.get("feedback_notes")
     action = state.get("pending_action")
     history: dict = dict(state.get("refinement_history") or {})
@@ -86,7 +87,7 @@ def generate_section(state: DocumentGenerationState) -> dict:
     )
 
     # RAG retrieval — query by section title for relevance
-    relevant_context = retrieve_context(session_id, query=section_title, limit=4)
+    relevant_context = retrieve_context(state["project_id"], query=section_title, limit=4)
     print(f"Context retrieved: {len(relevant_context)} chars")
 
     is_refinement = action == "refine" and feedback and state.get("current_section_content")

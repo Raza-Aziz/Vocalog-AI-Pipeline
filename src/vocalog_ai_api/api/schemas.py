@@ -1,4 +1,4 @@
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Union
 from pydantic import BaseModel, Field
 from vocalog_ai_api.application.pipelines.action_items_pipeline.schema import ActionItem
 
@@ -39,8 +39,15 @@ class MoMAndActionsResponse(BaseModel):
 
 # ── Document Generation schemas ──────────────────────────────────────────────
 
+class MeetingSourceInput(BaseModel):
+    meeting_id: str = Field(..., description="Unique identifier for this meeting.")
+    content: Union[str, dict] = Field(
+        ...,
+        description="Raw transcript text or structured transcript object with 'text' and 'words' fields.",
+    )
+
+
 class DemoDocumentGenerationRequest(BaseModel):
-    meeting_minutes: str = Field(..., description="Raw meeting minutes text.")
     project_id: str = Field(default="demo-project", description="Project identifier.")
     document_type: Literal["srs", "prd", "sdd"] = Field(
         default="srs",
@@ -50,6 +57,10 @@ class DemoDocumentGenerationRequest(BaseModel):
             "'prd' = Product Requirements Document, "
             "'sdd' = Software Design Document."
         ),
+    )
+    sources: List[MeetingSourceInput] = Field(
+        ...,
+        description="One or more meeting transcripts to synthesise the document from.",
     )
 
 

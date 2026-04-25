@@ -29,8 +29,9 @@ VECTOR_SIZE = 384  # Dimension for all-MiniLM-L6-v2
 # --- Type Definitions ---
 class VectorPayload(TypedDict):
     """Schema Contract for Vocalog Knowledge Base"""
-    session_id: str         # UUID: The primary grouping key (tenant)
-    meeting_id: str         # UUID: Could be same as session_id or differ if multiple sessions map to one meeting
+    project_id: str         # Project-level grouping key — primary tenant for doc-gen retrieval
+    session_id: str         # Kept for backward compatibility with MoM / action-items pipelines
+    meeting_id: str         # Identifies the specific meeting within a project
     doc_type: str           # "transcript", "mom", "srs_section", "feedback"
     chunk_type: str         # "speaker_turn", "topic", "section"
     content: str            # The actual text content
@@ -88,8 +89,8 @@ def ensure_collection_exists():
             )
         )
 
-    # Use session_id as the tenant key for physical grouping/sharding optimization
-    # (Note: In simple local Qdrant, this just ensures an index exists)
+    _create_index_if_not_exists(client, "project_id", models.PayloadSchemaType.KEYWORD)
+    _create_index_if_not_exists(client, "meeting_id", models.PayloadSchemaType.KEYWORD)
     _create_index_if_not_exists(client, "session_id", models.PayloadSchemaType.KEYWORD)
     _create_index_if_not_exists(client, "doc_type", models.PayloadSchemaType.KEYWORD)
     _create_index_if_not_exists(client, "chunk_type", models.PayloadSchemaType.KEYWORD)
@@ -142,34 +143,46 @@ def session_vectors_exist(session_id: str, doc_type: Optional[str] = None) -> bo
 
 
 def delete_session_vectors(session_id: str, doc_type: Optional[str] = None):
-    """
-    Idempotency: Clears existing vectors for a session (and optionally a specific doc_type)
-    BEFORE ingesting new ones. This prevents duplication.
-    """
+    """Clears vectors by session_id. Retained for MoM / action-items pipelines."""
     client = get_qdrant_client()
-    ensure_collection_exists() # Good practice to check existence
-    
+    ensure_collection_exists()
+
     must_filters = [
-        models.FieldCondition(
-            key="session_id",
-            match=models.MatchValue(value=session_id)
-        )
+        models.FieldCondition(key="session_id", match=models.MatchValue(value=session_id))
     ]
-    
     if doc_type:
         must_filters.append(
-            models.FieldCondition(
-                key="doc_type",
-                match=models.MatchValue(value=doc_type)
-            )
+            models.FieldCondition(key="doc_type", match=models.MatchValue(value=doc_type))
         )
-        
-    print(f"Clearing old vectors for session={session_id}, doc_type={doc_type or 'ALL'}")
+
+    print(f"Clearing vectors for session={session_id}, doc_type={doc_type or 'ALL'}")
     client.delete(
         collection_name=VOCALOG_MAIN_COLLECTION,
-        points_selector=models.FilterSelector(
-            filter=models.Filter(must=must_filters)
+        points_selector=models.FilterSelector(filter=models.Filter(must=must_filters))
+    )
+
+
+def delete_meeting_vectors(project_id: str, meeting_id: str, doc_type: Optional[str] = None):
+    """
+    Removes all vectors for a specific meeting within a project before re-ingestion.
+    Leaves all other meetings in the project's knowledge base untouched.
+    """
+    client = get_qdrant_client()
+    ensure_collection_exists()
+
+    must_filters = [
+        models.FieldCondition(key="project_id", match=models.MatchValue(value=project_id)),
+        models.FieldCondition(key="meeting_id", match=models.MatchValue(value=meeting_id)),
+    ]
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(key="doc_type", match=models.MatchValue(value=doc_type))
         )
+
+    print(f"Clearing vectors for project={project_id}, meeting={meeting_id}, doc_type={doc_type or 'ALL'}")
+    client.delete(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        points_selector=models.FilterSelector(filter=models.Filter(must=must_filters))
     )
 
 
@@ -233,26 +246,27 @@ def rerank_documents(query: str, documents: List[Dict[str, Any]], top_k: int = 5
 
 def query_knowledge_base(
     query_text: str,
-    session_id: str,
+    project_id: str,
     doc_type: Optional[str] = None,
     limit: int = 5,
     enable_reranking: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Unified retrieval function with optional 2-stage reranking.
+    Queries across all meetings within the project — project-level RAG.
     """
     client = get_qdrant_client()
-    ensure_collection_exists() # JIT check
-    
+    ensure_collection_exists()
+
     query_vector = embed_text(query_text)
-    
+
     must_filters = [
         models.FieldCondition(
-            key="session_id",
-            match=models.MatchValue(value=session_id)
+            key="project_id",
+            match=models.MatchValue(value=project_id)
         )
     ]
-    
+
     if doc_type:
         must_filters.append(
             models.FieldCondition(

@@ -1,138 +1,114 @@
 import uuid
+import hashlib
 from typing import List, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client.http import models
 
-# Import Centralized Infrastructure
 from vocalog_ai_api.infrastructure.vector_store.qdrant import (
     ensure_collection_exists,
-    session_vectors_exist,
-    delete_session_vectors,
+    delete_meeting_vectors,
     upsert_vectors,
     embed_documents,
     query_knowledge_base,
     embed_text,
-    VectorPayload
+    VectorPayload,
 )
 
-# TODO: Change Splitter to Semantic Chunking by langchain_experimental
-def ingest_minutes(session_id: str, input_data: str | dict):
+
+def _chunk_id(project_id: str, meeting_id: str, chunk_index: int) -> str:
+    """Deterministic UUID derived from project, meeting, and chunk position.
+
+    Ensures re-ingesting the same meeting upserts in place rather than creating
+    new points, while new meetings always append to the project knowledge base.
     """
-    Chunks, vectorizes, and stores in the Unified Knowledge Base.
-    ENFORCES IDEMPOTENCY: Deletes old 'transcript' chunks for this session first.
-    
+    raw = f"{project_id}:{meeting_id}:{chunk_index}".encode()
+    return str(uuid.UUID(bytes=hashlib.sha256(raw).digest()[:16]))
+
+
+# TODO: Change Splitter to Semantic Chunking by langchain_experimental
+def ingest_minutes(project_id: str, meeting_id: str, input_data: str | dict):
+    """
+    Chunks, vectorizes, and upserts a single meeting's transcript into the
+    project-level knowledge base.
+
+    Idempotency: existing vectors for this (project_id, meeting_id) pair are
+    purged before ingestion so re-submitting corrected source material stays in
+    sync without duplicating chunks or touching other meetings.
+
     Args:
-        session_id: The session UUID.
-        input_data: Can be raw text string OR a JSON-like dict with word-level metadata.
+        project_id: Project identifier — scopes retrieval across all meetings.
+        meeting_id: Unique identifier for this specific meeting.
+        input_data: Raw transcript string OR structured dict with 'text' + 'words'.
     """
     ensure_collection_exists()
 
-    # Skip if vectors for this session already exist — avoids redundant embedding cost
-    if session_vectors_exist(session_id=session_id, doc_type="transcript"):
-        print(f"--- Vector Store: Skipping ingestion — transcript vectors already exist for session {session_id} ---")
-        return
+    # Targeted deletion: removes only this meeting's chunks, leaves all others intact.
+    delete_meeting_vectors(project_id=project_id, meeting_id=meeting_id, doc_type="transcript")
 
-    # 1. IDEMPOTENCY: Delete existing transcript info for this session
-    # This ensures re-running generation doesn't duplicate data
-    delete_session_vectors(session_id=session_id, doc_type="transcript")
-
-    # 2. Process Input (Text vs JSON)
-    full_text = ""
-    word_metadata = [] # To assist with speaker extraction if available
-    
+    # Process input
     if isinstance(input_data, dict) and "text" in input_data:
-        # User provided the JSON format with 'text' and 'words'
         full_text = input_data["text"]
         word_metadata = input_data.get("words", [])
     elif isinstance(input_data, str):
         full_text = input_data
+        word_metadata = []
     else:
-        print("Error: Input data must be string or dict with 'text' field.")
-        return
+        raise ValueError("input_data must be a transcript string or a dict with a 'text' field.")
 
-    # 3. Chunk the text
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
-        separators=["\n\n", "\n", ".", " ", ""]
+        separators=["\n\n", "\n", ".", " ", ""],
     )
     chunks = text_splitter.split_text(full_text)
-    
-    if not chunks:
-        print("Warning: No chunks created from text.")
-        return
 
-    # 4. Create Embeddings (Batch)
-    print(f"Embedding {len(chunks)} chunks...")
+    if not chunks:
+        raise ValueError(f"No chunks produced from meeting {meeting_id} — source material may be empty.")
+
+    print(f"Embedding {len(chunks)} chunks for project={project_id}, meeting={meeting_id}...")
     vectors = embed_documents(chunks)
 
-    # 5. Prepare Points with Unified Schema
     points = []
-    
-    # Simple strategy: If we have word metadata, we try to map chunks back to speakers.
-    # Since splitting is by character, this is an approximation.
-    # For a robust solution, we'd split the WORD LIST directly, not the raw text.
-    # For now, we'll do a basic regex-like check: "Does this chunk contain text attributed to Speaker X?"
-    
     for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
-        
-        # Extract unique speakers present in this chunk
-        # If we have word metadata, checking intersection is safer
-        chunk_speakers = []
+        chunk_speakers: List[str] = []
         if word_metadata:
-             # Heuristic: If a word's text is in the chunk, add its speaker.
-             # Note: This is O(N*M) but N(words) and M(chunk size) are small enough for now.
-             # Optimization: use start/end char indices if available (JSON has times, not char indices, but order is preserved).
-             
-             # Faster approach: valid speakers in this session
-             unique_speakers = set(w.get("speaker_id") for w in word_metadata if w.get("speaker_id"))
-             for spk in unique_speakers:
-                 # Check if the speaker's name appears as a label (e.g. "Raza:") inside the chunk
-                 # OR if we want to be strict, we check if words attributed to this speaker are in the chunk.
-                 # Given the text format "Raza: We need...", finding "Raza" is likely part of the text.
-                 if spk in chunk: # formatting usually implies "Speaker:" is part of text
-                     chunk_speakers.append(spk)
-        
-        if not chunk_speakers: 
-             # Fallback or if no metadata provided
-             chunk_speakers = []
+            unique_speakers = {w.get("speaker_id") for w in word_metadata if w.get("speaker_id")}
+            chunk_speakers = [spk for spk in unique_speakers if spk in chunk]
 
-        # Construct strict payload
         payload = VectorPayload(
-            session_id=session_id,
-            meeting_id=session_id, # Assuming 1:1 for now
+            project_id=project_id,
+            session_id=project_id,  # backward compat for non-doc-gen pipelines
+            meeting_id=meeting_id,
             doc_type="transcript",
-            chunk_type="speaker_turn", 
+            chunk_type="speaker_turn",
             content=chunk,
             section_id=None,
             speakers=chunk_speakers,
             timestamp=None,
-            chunk_index=i
+            chunk_index=i,
         )
 
-        
         points.append(
             models.PointStruct(
-                id=str(uuid.uuid4()),
+                id=_chunk_id(project_id, meeting_id, i),
                 vector=vector,
-                payload=payload
+                payload=payload,
             )
         )
 
-    # 5. Upload to Centralized Knowledge Base
     upsert_vectors(points)
-    print(f"--- Vector Store: Indexed {len(points)} chunks for session {session_id} ---")
+    print(f"--- Vector Store: Upserted {len(points)} chunks for project={project_id}, meeting={meeting_id} ---")
 
 
-def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
+def retrieve_context(project_id: str, query: str, limit: int = 3) -> str:
     """
-    Searches for text relevant to 'query' within the specific 'session_id'.
-    Uses HybridRetriever (Module 5): Vector + BM25 + RRF Fusion + Reranking.
+    Retrieves context relevant to 'query' across all meetings in the project.
+    Uses HybridRetriever: Vector + BM25 + RRF Fusion + Reranking.
     """
     from vocalog_ai_api.application.pipelines.doc_generation_pipeline.hybrid_retriever import HybridRetriever
 
     retriever = HybridRetriever(
-        session_id=session_id,
+        project_id=project_id,
         doc_type="transcript",
         recall_k=20,
         final_k=limit,
@@ -140,9 +116,7 @@ def retrieve_context(session_id: str, query: str, limit: int = 3) -> str:
 
     results = retriever.retrieve(query, expand=True)
 
-    # Format results
     if not results:
         return "No relevant context found in meeting minutes."
 
-    context_blocks = [r["content"] for r in results]
-    return "\n\n---\n\n".join(context_blocks)
+    return "\n\n---\n\n".join(r["content"] for r in results)

@@ -21,7 +21,7 @@ class HybridRetriever:
     BM25 runs in-memory over the candidate set returned by vector search.
     
     Args:
-        session_id: The session to scope retrieval to.
+        project_id: Scopes retrieval across all meetings within the project.
         doc_type: Optional filter (e.g., "transcript").
         vector_weight: RRF weight for vector results (default 0.6).
         bm25_weight: RRF weight for BM25 results (default 0.4).
@@ -31,14 +31,14 @@ class HybridRetriever:
 
     def __init__(
         self,
-        session_id: str,
+        project_id: str,
         doc_type: Optional[str] = None,
         vector_weight: float = 0.6,
         bm25_weight: float = 0.4,
         recall_k: int = 20,
         final_k: int = 5,
     ):
-        self.session_id = session_id
+        self.project_id = project_id
         self.doc_type = doc_type
         self.vector_weight = vector_weight
         self.bm25_weight = bm25_weight
@@ -55,10 +55,10 @@ class HybridRetriever:
         """
         return query_knowledge_base(
             query_text=query,
-            session_id=self.session_id,
+            project_id=self.project_id,
             doc_type=self.doc_type,
             limit=k,
-            enable_reranking=False,  # We handle reranking ourselves after fusion
+            enable_reranking=False,  # reranking is handled after fusion in Stage 4
         )
 
     # ------------------------------------------------------------------ #

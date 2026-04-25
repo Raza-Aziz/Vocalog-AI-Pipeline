@@ -114,7 +114,10 @@ async def start_document_generation(request: DemoDocumentGenerationRequest):
         "thread_id": document_id,
         "project_id": request.project_id,
         "document_type": request.document_type,
-        "meeting_minutes": request.meeting_minutes,
+        "meeting_sources": [
+            {"meeting_id": s.meeting_id, "content": s.content}
+            for s in request.sources
+        ],
         "sections_outline": [],
         "current_section_index": 0,
         "current_section_content": "",

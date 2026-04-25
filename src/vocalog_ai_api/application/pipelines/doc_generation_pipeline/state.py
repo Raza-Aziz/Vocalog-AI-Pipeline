@@ -1,9 +1,14 @@
-from typing import TypedDict, List, Optional, Dict, Literal
+from typing import TypedDict, List, Optional, Dict, Literal, Any
 
 
 class Section(TypedDict):
     title: str
     content: str
+
+
+class MeetingSource(TypedDict):
+    meeting_id: str   # Unique identifier for this meeting within the project
+    content: Any      # str (raw transcript) or dict (structured with 'text' + 'words')
 
 
 class DocumentGenerationState(TypedDict):
@@ -15,7 +20,7 @@ class DocumentGenerationState(TypedDict):
     document_type: str      # "srs" | "prd" | "sdd" (or any registered strategy key)
 
     # ── Source material ──────────────────────────────────────────────────────
-    meeting_minutes: Optional[str]
+    meeting_sources: List[MeetingSource]  # One or more meetings to synthesise from
 
     # ── Document progress ────────────────────────────────────────────────────
     sections_outline: List[str]       # Ordered section headings from the strategy
