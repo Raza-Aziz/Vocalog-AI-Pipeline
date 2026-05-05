@@ -93,6 +93,34 @@ class DemoSectionDraftResponse(BaseModel):
     message: str = "Review the section draft."
 
 
+# ── Meeting Q&A schemas ──────────────────────────────────────────────────────
+
+class MeetingQARequest(BaseModel):
+    meeting_id: str = Field(
+        ..., description="Unique identifier of the meeting to query. Must match the ID used during ingestion."
+    )
+    question: str = Field(..., description="Natural-language question about the meeting.")
+
+
+class CitedSource(BaseModel):
+    label: str = Field(..., description="Citation label used in the answer, e.g. 'MOM-1' or 'TRANSCRIPT-2'.")
+    source: Literal["minutes", "transcript"]
+    doc_type: str
+    chunk_index: int
+    speakers: List[str] = Field(default_factory=list)
+    excerpt: str = Field(..., description="First 250 characters of the source chunk.")
+
+
+class MeetingQAResponse(BaseModel):
+    meeting_id: str
+    question: str
+    answer: str = Field(..., description="Grounded answer citing relevant discussion points and formal conclusions.")
+    citations: List[CitedSource] = Field(
+        default_factory=list,
+        description="Source chunks the answer draws from, labelled MOM-N or TRANSCRIPT-N.",
+    )
+
+
 # ── Action Items schemas ─────────────────────────────────────────────────────
 
 class ActionItemsForFrontendRequest(BaseModel):

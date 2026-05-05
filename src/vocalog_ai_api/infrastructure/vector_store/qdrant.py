@@ -274,19 +274,19 @@ def query_knowledge_base(
                 match=models.MatchValue(value=doc_type)
             )
         )
-    
+
     # Stage 1: Recall
     # If reranking is ON, we fetch MORE candidates (RECALL_K)
     # If OFF, we just fetch the user requested limit
     fetch_limit = RECALL_K if enable_reranking else limit
-        
+
     results = client.query_points(
         collection_name=VOCALOG_MAIN_COLLECTION,
         query=query_vector,
         query_filter=models.Filter(must=must_filters),
         limit=fetch_limit
     ).points
-    
+
     # Convert Qdrant PointStructs to simple dicts
     candidate_docs = [
         {
@@ -297,12 +297,81 @@ def query_knowledge_base(
         }
         for r in results
     ]
-    
+
     # Stage 2: Rerank (Optional)
     if enable_reranking and candidate_docs:
         final_docs = rerank_documents(query_text, candidate_docs, top_k=limit) # Return only requested 'limit'
     else:
         final_docs = candidate_docs[:limit]
-    
+
     return final_docs
+
+
+def query_by_meeting(
+    query_text: str,
+    meeting_id: str,
+    doc_type: Optional[str] = None,
+    limit: int = 5,
+    enable_reranking: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Meeting-scoped retrieval — filters strictly by meeting_id.
+    Used for the Meeting Q&A feature to prevent cross-meeting data leakage.
+    """
+    client = get_qdrant_client()
+    ensure_collection_exists()
+
+    query_vector = embed_text(query_text)
+
+    must_filters: List[Any] = [
+        models.FieldCondition(key="meeting_id", match=models.MatchValue(value=meeting_id))
+    ]
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(key="doc_type", match=models.MatchValue(value=doc_type))
+        )
+
+    fetch_limit = RECALL_K if enable_reranking else limit
+
+    results = client.query_points(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        query=query_vector,
+        query_filter=models.Filter(must=must_filters),
+        limit=fetch_limit,
+    ).points
+
+    candidate_docs = [
+        {
+            "content": r.payload.get("content", ""),
+            "metadata": r.payload,
+            "score": r.score,
+            "id": r.id,
+        }
+        for r in results
+    ]
+
+    if enable_reranking and candidate_docs:
+        return rerank_documents(query_text, candidate_docs, top_k=limit)
+    return candidate_docs[:limit]
+
+
+def meeting_vectors_exist(meeting_id: str, doc_type: Optional[str] = None) -> bool:
+    """Returns True if at least one vector is indexed for the given meeting_id."""
+    client = get_qdrant_client()
+    ensure_collection_exists()
+
+    must_filters: List[Any] = [
+        models.FieldCondition(key="meeting_id", match=models.MatchValue(value=meeting_id))
+    ]
+    if doc_type:
+        must_filters.append(
+            models.FieldCondition(key="doc_type", match=models.MatchValue(value=doc_type))
+        )
+
+    result = client.count(
+        collection_name=VOCALOG_MAIN_COLLECTION,
+        count_filter=models.Filter(must=must_filters),
+        exact=False,
+    )
+    return result.count > 0
 

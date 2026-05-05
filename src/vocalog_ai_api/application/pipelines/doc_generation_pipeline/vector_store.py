@@ -12,6 +12,7 @@ from vocalog_ai_api.infrastructure.vector_store.qdrant import (
     query_knowledge_base,
     embed_text,
     VectorPayload,
+    meeting_vectors_exist,
 )
 
 
@@ -98,6 +99,111 @@ def ingest_minutes(project_id: str, meeting_id: str, input_data: str | dict):
 
     upsert_vectors(points)
     print(f"--- Vector Store: Upserted {len(points)} chunks for project={project_id}, meeting={meeting_id} ---")
+
+
+# ── Meeting Q&A Ingestion ─────────────────────────────────────────────────────
+
+_QA_PROJECT_PREFIX = "__qa__"
+
+
+def _qa_chunk_id(meeting_id: str, doc_type: str, chunk_index: int) -> str:
+    """Deterministic UUID for Q&A-scoped chunks."""
+    raw = f"{_QA_PROJECT_PREFIX}:{meeting_id}:{doc_type}:{chunk_index}".encode()
+    return str(uuid.UUID(bytes=hashlib.sha256(raw).digest()[:16]))
+
+
+def ingest_transcript_for_qa(meeting_id: str, transcript_text: str) -> int:
+    """
+    Chunks and upserts a raw transcript into the vector store, tagged with
+    meeting_id so Meeting Q&A can retrieve it without touching other meetings.
+
+    Idempotent: existing transcript vectors for this meeting are replaced.
+    Returns the number of chunks upserted.
+    """
+    ensure_collection_exists()
+
+    if meeting_vectors_exist(meeting_id, doc_type="transcript"):
+        delete_meeting_vectors(
+            project_id=_QA_PROJECT_PREFIX, meeting_id=meeting_id, doc_type="transcript"
+        )
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000, chunk_overlap=200, separators=["\n\n", "\n", ".", " ", ""]
+    )
+    chunks = splitter.split_text(transcript_text)
+    if not chunks:
+        return 0
+
+    vectors = embed_documents(chunks)
+    points = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        payload = VectorPayload(
+            project_id=_QA_PROJECT_PREFIX,
+            session_id=meeting_id,
+            meeting_id=meeting_id,
+            doc_type="transcript",
+            chunk_type="speaker_turn",
+            content=chunk,
+            section_id=None,
+            speakers=[],
+            timestamp=None,
+            chunk_index=i,
+        )
+        points.append(
+            models.PointStruct(id=_qa_chunk_id(meeting_id, "transcript", i), vector=vector, payload=payload)
+        )
+
+    upsert_vectors(points)
+    print(f"--- Q&A Ingest: {len(points)} transcript chunks for meeting={meeting_id} ---")
+    return len(points)
+
+
+def ingest_mom_for_qa(meeting_id: str, mom_markdown: str) -> int:
+    """
+    Chunks and upserts the generated Minutes of Meeting into the vector store,
+    tagged with meeting_id so Meeting Q&A can cross-reference formal summaries
+    with raw transcript dialogue.
+
+    Idempotent: existing MoM vectors for this meeting are replaced.
+    Returns the number of chunks upserted.
+    """
+    ensure_collection_exists()
+
+    if meeting_vectors_exist(meeting_id, doc_type="mom"):
+        delete_meeting_vectors(
+            project_id=_QA_PROJECT_PREFIX, meeting_id=meeting_id, doc_type="mom"
+        )
+
+    # Smaller chunks for MoM — sections are naturally shorter and denser
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600, chunk_overlap=100, separators=["\n\n", "\n", ". ", " ", ""]
+    )
+    chunks = splitter.split_text(mom_markdown)
+    if not chunks:
+        return 0
+
+    vectors = embed_documents(chunks)
+    points = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        payload = VectorPayload(
+            project_id=_QA_PROJECT_PREFIX,
+            session_id=meeting_id,
+            meeting_id=meeting_id,
+            doc_type="mom",
+            chunk_type="topic",
+            content=chunk,
+            section_id=None,
+            speakers=[],
+            timestamp=None,
+            chunk_index=i,
+        )
+        points.append(
+            models.PointStruct(id=_qa_chunk_id(meeting_id, "mom", i), vector=vector, payload=payload)
+        )
+
+    upsert_vectors(points)
+    print(f"--- Q&A Ingest: {len(points)} MoM chunks for meeting={meeting_id} ---")
+    return len(points)
 
 
 def retrieve_context(project_id: str, query: str, limit: int = 3) -> str:

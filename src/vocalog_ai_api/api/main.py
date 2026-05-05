@@ -27,10 +27,18 @@ from vocalog_ai_api.api.schemas import (
     DemoDocumentStatusResponse,
     ActionItemsForFrontendRequest,
     ActionItemsForFrontendResponse,
+    MeetingQARequest,
+    MeetingQAResponse,
+    CitedSource,
 )
 from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
 from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import doc_gen_graph
+from vocalog_ai_api.application.pipelines.doc_generation_pipeline.vector_store import (
+    ingest_transcript_for_qa,
+    ingest_mom_for_qa,
+)
+from vocalog_ai_api.application.pipelines.meeting_qa_pipeline.graph import meeting_qa_graph
 
 app = FastAPI(title="Vocalog AI — Document Generation Module", version="2.0.0")
 
@@ -41,19 +49,32 @@ app = FastAPI(title="Vocalog AI — Document Generation Module", version="2.0.0"
 def generate_minutes_of_meeting(data: TranscriptInput):
     """
     Generate Minutes of Meeting and extract action items from a transcript.
-    Both graphs share the same thread_id so all outputs land in one SQLite session.
+
+    When a meeting_id is supplied the raw transcript and generated MoM are
+    automatically ingested into the vector store so the /meeting-qa endpoint
+    can answer questions about this specific meeting.
     """
     user_id = data.user_id or "anonymous"
     session_suffix = data.session_id or data.meeting_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": f"{user_id}:{session_suffix}"}}
+
     mom_result = mom_graph.invoke({"raw_transcript": data.transcript.text}, config=config)
     ai_result = action_items_graph.invoke(
         {"transcript": data.transcript.text, "session_id": session_suffix},
         config=config,
     )
+
+    mom_markdown: str = mom_result.get("mom_markdown", "")
+
+    # Auto-ingest both sources when a meeting_id is present so Meeting Q&A works
+    if data.meeting_id:
+        ingest_transcript_for_qa(data.meeting_id, data.transcript.text)
+        if mom_markdown:
+            ingest_mom_for_qa(data.meeting_id, mom_markdown)
+
     actions = ai_result.get("extracted_actions", [])
     return MoMAndActionsResponse(
-        meeting_minutes=mom_result.get("mom_markdown", ""),
+        meeting_minutes=mom_markdown,
         action_items=actions,
         total_count=len(actions),
     )
@@ -230,6 +251,42 @@ async def extract_action_items_for_frontend(request: ActionItemsForFrontendReque
     actions = result.get("extracted_actions", [])
     return ActionItemsForFrontendResponse(actions=actions, total_count=len(actions))
 
+
+
+# ── Meeting Q&A ──────────────────────────────────────────────────────────────
+
+@app.post("/meeting-qa", response_model=MeetingQAResponse)
+async def meeting_qa(request: MeetingQARequest):
+    """
+    Answer a natural-language question about a specific meeting using RAG.
+
+    Retrieves relevant chunks from both the raw transcript and the generated
+    Minutes of Meeting (MoM), cross-references them, and returns a grounded
+    answer with inline citations (MOM-N / TRANSCRIPT-N).
+
+    The query is scoped strictly to the supplied meeting_id — no data from
+    other meetings in the system will influence the response.
+
+    The meeting must have been previously processed via POST /generate-mom
+    with the same meeting_id for its content to be available.
+    """
+    result = meeting_qa_graph.invoke({
+        "meeting_id": request.meeting_id,
+        "question": request.question,
+        "transcript_chunks": [],
+        "mom_chunks": [],
+        "answer": "",
+        "citations": [],
+    })
+
+    citations = [CitedSource(**c) for c in result.get("citations", [])]
+
+    return MeetingQAResponse(
+        meeting_id=request.meeting_id,
+        question=request.question,
+        answer=result.get("answer", ""),
+        citations=citations,
+    )
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
