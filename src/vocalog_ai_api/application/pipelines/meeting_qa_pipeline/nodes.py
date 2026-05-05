@@ -21,6 +21,7 @@ Guidelines:
 - If the context is insufficient to answer, state that clearly rather than guessing.
 - Structure the response with a direct answer first, then supporting evidence.
 - Cite sources inline as [MOM-N] or [TRANSCRIPT-N] matching the labels in the context.\
+- Give the whole output in proper markdown
 """
 
 
