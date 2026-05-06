@@ -37,6 +37,18 @@ class MoMAndActionsResponse(BaseModel):
     total_count: int = Field(..., description="Number of extracted action items.")
 
 
+# ── Shared resolution schema (used by both doc-gen and conflict resolution) ───
+
+class ConflictResolutionInput(BaseModel):
+    topic: str = Field(..., description="The conflicted topic — must match ConflictItemSchema.topic.")
+    authoritative_meeting_id: str = Field(
+        ..., description="Meeting ID whose position should be followed."
+    )
+    authoritative_position: str = Field(
+        ..., description="What the authoritative meeting states on this topic."
+    )
+
+
 # ── Document Generation schemas ──────────────────────────────────────────────
 
 class MeetingSourceInput(BaseModel):
@@ -325,16 +337,6 @@ class ProjectAnalysisResponse(BaseModel):
     meetings_analyzed: int
 
 
-class ConflictResolutionInput(BaseModel):
-    topic: str = Field(..., description="The conflicted topic — must match ConflictItemSchema.topic.")
-    authoritative_meeting_id: str = Field(
-        ..., description="Meeting ID whose position should be followed."
-    )
-    authoritative_position: str = Field(
-        ..., description="What the authoritative meeting states on this topic."
-    )
-
-
 class ResolveConflictRequest(BaseModel):
     conflict: ConflictItemSchema = Field(..., description="The conflict item from /analyze-project-meetings.")
     authoritative_meeting_id: str = Field(
@@ -344,6 +346,31 @@ class ResolveConflictRequest(BaseModel):
 
 class ResolveConflictResponse(BaseModel):
     resolution: ConflictResolutionInput
+
+
+# ── Suggestion accept / reject schemas ───────────────────────────────────────
+
+class AcceptSuggestionRequest(BaseModel):
+    document_id: str = Field(..., description="document_id returned by POST /generate-document.")
+    suggestion: Suggestion = Field(..., description="The suggestion object to apply.")
+
+
+class AcceptSuggestionResponse(BaseModel):
+    document_id: str
+    section_title: str
+    applied: bool
+    message: str
+
+
+class RejectSuggestionRequest(BaseModel):
+    document_id: str = Field(..., description="document_id of the document being edited.")
+    suggestion_id: str = Field(..., description="suggestion_id from the Suggestion object.")
+
+
+class RejectSuggestionResponse(BaseModel):
+    document_id: str
+    suggestion_id: str
+    message: str
 
 
 # ── Action Items schemas ─────────────────────────────────────────────────────

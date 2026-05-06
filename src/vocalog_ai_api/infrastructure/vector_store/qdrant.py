@@ -6,8 +6,10 @@ from dotenv import load_dotenv
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from qdrant_client.http.exceptions import ResponseHandlingException
 from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import CrossEncoder
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 load_dotenv()
 
@@ -49,11 +51,18 @@ _reranker_instance: Optional[CrossEncoder] = None
 def get_qdrant_client() -> QdrantClient:
     global _client_instance
     if _client_instance is None:
+        kwargs = {"url": QDRANT_URL, "timeout": 10}
         if QDRANT_API_KEY:
-            _client_instance = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        else:
-            _client_instance = QdrantClient(url=QDRANT_URL)
+            kwargs["api_key"] = QDRANT_API_KEY
+        _client_instance = QdrantClient(**kwargs)
     return _client_instance
+
+
+def _reset_qdrant_client() -> QdrantClient:
+    """Force-recreate the singleton — called after a connection error."""
+    global _client_instance
+    _client_instance = None
+    return get_qdrant_client()
 
 def get_embeddings_model() -> HuggingFaceEmbeddings:
     global _embeddings_instance
@@ -70,8 +79,17 @@ def get_reranker_model() -> CrossEncoder:
     return _reranker_instance
 
 
+_QDRANT_RETRY = retry(
+    retry=retry_if_exception_type((ResponseHandlingException, Exception)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    reraise=True,
+)
+
+
 # --- Core Operations ---
 
+@_QDRANT_RETRY
 def ensure_collection_exists():
     """
     Ensures the 'vocalog_main' collection exists with proper configuration.
@@ -186,6 +204,7 @@ def delete_meeting_vectors(project_id: str, meeting_id: str, doc_type: Optional[
     )
 
 
+@_QDRANT_RETRY
 def upsert_vectors(points: List[models.PointStruct]):
     """
     Centralized upsert method.

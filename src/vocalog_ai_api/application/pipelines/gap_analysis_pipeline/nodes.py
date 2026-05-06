@@ -8,6 +8,7 @@ from vocalog_ai_api.application.pipelines.gap_analysis_pipeline.state import (
 )
 from vocalog_ai_api.application.pipelines.gap_analysis_pipeline.requirements import get_section_requirements
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.hybrid_retriever import HybridRetriever
+from langchain_core.messages import SystemMessage, HumanMessage
 from vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
 # ── Structured output schemas ─────────────────────────────────────────────────
@@ -38,9 +39,9 @@ class _GapItem(BaseModel):
         description="A direct natural-language question to ask the user to resolve this gap."
     )
     options: List[_GapOption] = Field(
-        description="Exactly 2 or 3 options the user can choose from.",
+        description="Exactly 2 options the user can choose from.",
         min_length=2,
-        max_length=3,
+        max_length=2,
     )
 
 
@@ -51,39 +52,36 @@ class _SectionGapAnalysis(BaseModel):
     )
 
 
-_structured_llm = llm.with_structured_output(_SectionGapAnalysis)
+_structured_llm = llm.with_structured_output(_SectionGapAnalysis, method="json_mode")
 
-_GAP_PROMPT = """\
-You are a document quality analyst auditing a {doc_type} section for completeness.
+_GAP_SYSTEM = (
+    "You are a document quality analyst. "
+    "You MUST respond with ONLY a valid JSON object — no markdown, no explanation, no table. "
+    'The JSON must have exactly one key "gaps" whose value is a list of gap objects. '
+    "Each gap object must have: gap_type (string), gap_description (string), "
+    "question (string), options (list of exactly 2 objects each with option_id, text, source). "
+    'If there are no gaps return {"gaps": []}.'
+)
+
+_GAP_HUMAN = """\
+Audit this {doc_type} section for completeness.
 
 SECTION: "{section_title}"
 ───────────────────────────────────────────
 {section_content}
 ───────────────────────────────────────────
 
-COMPLETENESS REQUIREMENTS for this section:
+COMPLETENESS REQUIREMENTS:
 {requirements_list}
 
-RELEVANT MEETING CONTEXT (use to derive options grounded in project data):
+MEETING CONTEXT (use to derive grounded options):
 ───────────────────────────────────────────
 {meeting_context}
 ───────────────────────────────────────────
 
-TASK:
-Identify every gap — a requirement criterion that is either absent, vague, or unmeasurable \
-in the section content above.
-
-For each gap:
-1. gap_type: choose the most specific type.
-2. gap_description: one sentence, specific (e.g. "Performance NFR lacks a measurable latency target").
-3. question: a direct question to the user that, when answered, resolves the gap \
-   (e.g. "What should the system's API response time target be under normal load?").
-4. options: provide exactly 2–3 choices:
-   - Derive options from the MEETING CONTEXT when possible (source = 'meeting_context').
-   - If meeting context doesn't help, use industry-standard defaults (source = 'industry_standard').
-   - Each option must be a concrete, usable value — not a placeholder.
-
-Only report genuine gaps. If the section satisfies a criterion, do not report it.\
+Report at most 5 genuine gaps (criteria that are absent, vague, or unmeasurable).
+For each gap provide exactly 2 options — prefer meeting_context sources, fall back to industry_standard.
+Each option must be a concrete usable value, not a placeholder.\
 """
 
 _RESOLVE_PROMPT = """\
@@ -222,16 +220,20 @@ def analyze_gaps(state: GapAnalysisState) -> dict:
 
         requirements_list = "\n".join(f"- {req}" for req in requirements)
 
-        prompt = _GAP_PROMPT.format(
-            doc_type=doc_type.upper(),
-            section_title=section_title,
-            section_content=section_content,
-            requirements_list=requirements_list,
-            meeting_context=meeting_context,
-        )
+        # Truncate to keep total prompt within Groq's token budget and prevent JSON truncation
+        messages = [
+            SystemMessage(content=_GAP_SYSTEM),
+            HumanMessage(content=_GAP_HUMAN.format(
+                doc_type=doc_type.upper(),
+                section_title=section_title,
+                section_content=section_content[:2500],
+                requirements_list=requirements_list,
+                meeting_context=meeting_context[:800],
+            )),
+        ]
 
         try:
-            result: _SectionGapAnalysis = _structured_llm.invoke(prompt)
+            result: _SectionGapAnalysis = _structured_llm.invoke(messages)
         except Exception as e:
             print(f"[GapAnalysis] LLM call failed for section '{section_title}': {e}")
             continue

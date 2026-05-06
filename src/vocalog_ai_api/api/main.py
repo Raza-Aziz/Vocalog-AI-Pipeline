@@ -50,6 +50,10 @@ from vocalog_ai_api.api.schemas import (
     ConflictResolutionInput,
     ResolveConflictRequest,
     ResolveConflictResponse,
+    AcceptSuggestionRequest,
+    AcceptSuggestionResponse,
+    RejectSuggestionRequest,
+    RejectSuggestionResponse,
 )
 from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
 from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
@@ -575,6 +579,105 @@ async def resolve_gap(request: ResolveGapRequest):
         )
 
     return ResolveGapResponse(suggestion=Suggestion(**raw))
+
+
+# ── Suggestion Accept / Reject ────────────────────────────────────────────────
+
+def _apply_suggestion_to_content(content: str, original_text: str, suggested_text: str, suggestion_type: str) -> str:
+    """Apply a suggestion's text change to section content. Returns updated content."""
+    if suggestion_type == "update":
+        return content.replace(original_text, suggested_text, 1)
+    elif suggestion_type == "addition":
+        return content.replace(original_text, original_text + "\n\n" + suggested_text, 1)
+    elif suggestion_type == "deletion":
+        return content.replace(original_text, "", 1)
+    return content
+
+
+@app.post("/accept-suggestion", response_model=AcceptSuggestionResponse)
+async def accept_suggestion(request: AcceptSuggestionRequest):
+    """
+    Apply an accepted suggestion directly to the relevant section in the document checkpoint.
+
+    Finds the section by title in final_document (approved sections) or the active draft,
+    applies the text change (update / addition / deletion), and writes it back to SQLite
+    via update_state — without resuming or interrupting the generation graph.
+
+    The original_text must be a verbatim substring of the section content (this is guaranteed
+    by the suggestion pipeline's validation). If it is not found, a 422 is returned.
+    """
+    from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import doc_gen_graph
+
+    s = request.suggestion
+    config = {"configurable": {"thread_id": request.document_id}}
+    checkpoint = doc_gen_graph.get_state(config)
+
+    if checkpoint is None or not checkpoint.values:
+        raise HTTPException(status_code=404, detail=f"Document '{request.document_id}' not found.")
+
+    doc_state = checkpoint.values
+    final_document = list(doc_state.get("final_document", []))
+    current_content = doc_state.get("current_section_content", "")
+    sections_outline = doc_state.get("sections_outline", [])
+    current_idx = doc_state.get("current_section_index", 0)
+
+    # Try approved sections first
+    for i, section in enumerate(final_document):
+        if section.get("title") == s.section_title:
+            content = section.get("content", "")
+            if s.original_text and s.original_text not in content:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"original_text not found verbatim in section '{s.section_title}'.",
+                )
+            final_document[i] = {
+                "title": section["title"],
+                "content": _apply_suggestion_to_content(content, s.original_text, s.suggested_text, s.suggestion_type),
+            }
+            doc_gen_graph.update_state(config, {"final_document": final_document})
+            return AcceptSuggestionResponse(
+                document_id=request.document_id,
+                section_title=s.section_title,
+                applied=True,
+                message=f"Suggestion applied to approved section '{s.section_title}'.",
+            )
+
+    # Fall back to active draft
+    active_title = sections_outline[current_idx] if current_idx < len(sections_outline) else None
+    if active_title == s.section_title and current_content:
+        if s.original_text and s.original_text not in current_content:
+            raise HTTPException(
+                status_code=422,
+                detail=f"original_text not found verbatim in active draft '{s.section_title}'.",
+            )
+        updated = _apply_suggestion_to_content(current_content, s.original_text, s.suggested_text, s.suggestion_type)
+        doc_gen_graph.update_state(config, {"current_section_content": updated})
+        return AcceptSuggestionResponse(
+            document_id=request.document_id,
+            section_title=s.section_title,
+            applied=True,
+            message=f"Suggestion applied to active draft '{s.section_title}'.",
+        )
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Section '{s.section_title}' not found in document '{request.document_id}'.",
+    )
+
+
+@app.post("/reject-suggestion", response_model=RejectSuggestionResponse)
+async def reject_suggestion(request: RejectSuggestionRequest):
+    """
+    Discard a suggestion. No document state is modified.
+
+    The document checkpoint is unchanged — rejection is a client-side decision
+    that simply tells the system the suggestion will not be applied.
+    """
+    return RejectSuggestionResponse(
+        document_id=request.document_id,
+        suggestion_id=request.suggestion_id,
+        message="Suggestion rejected. No changes applied to the document.",
+    )
 
 
 # ── Conflict Resolution ───────────────────────────────────────────────────────
