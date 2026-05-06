@@ -30,6 +30,23 @@ from vocalog_ai_api.api.schemas import (
     MeetingQARequest,
     MeetingQAResponse,
     CitedSource,
+    DocAssistantRequest,
+    DocAssistantResponse,
+    DocAssistantCitation,
+    DocAssistantDocumentSnapshot,
+    Suggestion,
+    SuggestUpdatesRequest,
+    SuggestUpdatesResponse,
+    GapAnalysisRequest,
+    GapAnalysisResponse,
+    GapItemSchema,
+    GapOptionSchema,
+    ResolveGapRequest,
+    ResolveGapResponse,
+    ProjectAnalysisRequest,
+    ProjectAnalysisResponse,
+    ConflictItemSchema,
+    AlignedTopicSchema,
 )
 from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
 from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
@@ -39,6 +56,11 @@ from vocalog_ai_api.application.pipelines.doc_generation_pipeline.vector_store i
     ingest_mom_for_qa,
 )
 from vocalog_ai_api.application.pipelines.meeting_qa_pipeline.graph import meeting_qa_graph
+from vocalog_ai_api.application.pipelines.doc_assistant_pipeline.graph import doc_assistant_graph
+from vocalog_ai_api.application.pipelines.suggestion_pipeline.graph import suggestion_graph
+from vocalog_ai_api.application.pipelines.gap_analysis_pipeline.graph import gap_analysis_graph
+from vocalog_ai_api.application.pipelines.gap_analysis_pipeline.nodes import resolve_gap_to_suggestion
+from vocalog_ai_api.application.pipelines.project_analysis_pipeline.graph import project_analysis_graph
 
 app = FastAPI(title="Vocalog AI — Document Generation Module", version="2.0.0")
 
@@ -286,6 +308,315 @@ async def meeting_qa(request: MeetingQARequest):
         question=request.question,
         answer=result.get("answer", ""),
         citations=citations,
+    )
+
+
+# ── Document Generation Assistant ────────────────────────────────────────────
+
+@app.post("/doc-assistant", response_model=DocAssistantResponse)
+async def doc_assistant(request: DocAssistantRequest):
+    """
+    Intelligent companion for users navigating the document generation process.
+
+    State-aware: reads the live document checkpoint (approved sections, active
+    draft, refinement/feedback history) directly from SQLite so every answer
+    reflects the document's real-time state.
+
+    Project-wide RAG: runs multi-probe hybrid retrieval (Vector + BM25 + RRF +
+    CrossEncoder) across all meeting transcripts and Minutes of Meeting ingested
+    for the project, then cross-references them with the document content.
+
+    Useful questions:
+      - "How did we arrive at this requirement?"
+      - "Which meeting decided on this architecture?"
+      - "Why was Section 2 rewritten?"
+      - "What did the team say about the auth system?"
+    """
+    initial_state = {
+        "document_id": request.document_id,
+        "question": request.question,
+        # doc-state fields — populated by load_document_state node
+        "project_id": "",
+        "document_type": "",
+        "sections_outline": [],
+        "current_section_index": 0,
+        "current_section_content": "",
+        "final_document": [],
+        "refinement_history": {},
+        "meeting_sources": [],
+        "is_complete": False,
+        "document_found": False,
+        # retrieval + output fields
+        "retrieved_chunks": [],
+        "answer": "",
+        "citations": [],
+    }
+
+    result = doc_assistant_graph.invoke(initial_state)
+
+    # Build the document snapshot for the response envelope
+    sections_outline = result.get("sections_outline", [])
+    current_idx = result.get("current_section_index", 0)
+    is_complete = result.get("is_complete", False)
+    document_found = result.get("document_found", False)
+
+    snapshot = DocAssistantDocumentSnapshot(
+        document_type=result.get("document_type", ""),
+        status=(
+            "not_found" if not document_found
+            else "completed" if is_complete
+            else "in_progress"
+        ),
+        approved_sections=len(result.get("final_document", [])),
+        total_sections=len(sections_outline),
+        active_section=(
+            sections_outline[current_idx]
+            if sections_outline and current_idx < len(sections_outline) and not is_complete
+            else None
+        ),
+        source_meetings=[
+            s.get("meeting_id", "") for s in result.get("meeting_sources", []) if s.get("meeting_id")
+        ],
+    )
+
+    citations = [DocAssistantCitation(**c) for c in result.get("citations", [])]
+
+    return DocAssistantResponse(
+        document_id=request.document_id,
+        question=request.question,
+        answer=result.get("answer", ""),
+        citations=citations,
+        document_snapshot=snapshot,
+    )
+
+
+# ── Inline Suggestion & Synchronization ──────────────────────────────────────
+
+@app.post("/suggest-updates", response_model=SuggestUpdatesResponse)
+async def suggest_updates(request: SuggestUpdatesRequest):
+    """
+    Synchronize an existing document with a newly added meeting transcript.
+
+    Ingests the new meeting into the project knowledge base, then performs a
+    surgical section-by-section analysis of every approved document section.
+    Returns a list of localized Suggestions — each containing the exact original
+    text to modify, the proposed replacement, a rationale, and the source meeting.
+
+    Suggestions are structured for a "Suggesting Mode" UX (Google Docs / Tiptap
+    annotations): clients can present each change inline and let the user
+    accept or reject it individually without touching the rest of the document.
+
+    Only approved (finalized) sections are analyzed. The active draft and
+    unapproved sections are not modified.
+    """
+    initial_state = {
+        "document_id": request.document_id,
+        "new_meeting_id": request.new_meeting_id,
+        "new_meeting_content": request.new_meeting_content,
+        "project_id": "",
+        "document_type": "",
+        "sections_outline": [],
+        "final_document": [],
+        "document_found": False,
+        "suggestions": [],
+    }
+
+    result = suggestion_graph.invoke(initial_state)
+
+    if not result.get("document_found"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document '{request.document_id}' not found. Verify the document_id.",
+        )
+
+    raw_suggestions = result.get("suggestions", [])
+    suggestions = [Suggestion(**s) for s in raw_suggestions]
+
+    return SuggestUpdatesResponse(
+        document_id=request.document_id,
+        new_meeting_id=request.new_meeting_id,
+        suggestions=suggestions,
+        total_count=len(suggestions),
+    )
+
+
+# ── Gap Analysis ──────────────────────────────────────────────────────────────
+
+@app.post("/gap-analysis", response_model=GapAnalysisResponse)
+async def gap_analysis(request: GapAnalysisRequest):
+    """
+    Analyze a document's approved sections and active draft against strategy-specific
+    completeness requirements (e.g., verifying an SRS has measurable NFRs, or a PRD
+    defines success KPIs with baselines and targets).
+
+    For every identified gap, returns a natural-language question linked to the relevant
+    section plus 2–3 multiple-choice options derived from the project's meeting history
+    or industry standards — whichever is more applicable.
+
+    Gaps are ordered by section, matching the document outline. Each gap carries a
+    unique gap_id to be used when calling POST /resolve-gap.
+    """
+    initial_state = {
+        "document_id": request.document_id,
+        "project_id": "",
+        "document_type": "",
+        "sections_outline": [],
+        "final_document": [],
+        "current_section_content": "",
+        "current_section_index": 0,
+        "document_found": False,
+        "gaps": [],
+    }
+
+    result = gap_analysis_graph.invoke(initial_state)
+
+    if not result.get("document_found"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document '{request.document_id}' not found. Verify the document_id.",
+        )
+
+    raw_gaps = result.get("gaps", [])
+    gaps = [
+        GapItemSchema(
+            gap_id=g["gap_id"],
+            section_title=g["section_title"],
+            section_index=g["section_index"],
+            gap_type=g["gap_type"],
+            gap_description=g["gap_description"],
+            question=g["question"],
+            options=[GapOptionSchema(**o) for o in g["options"]],
+        )
+        for g in raw_gaps
+    ]
+
+    return GapAnalysisResponse(
+        document_id=request.document_id,
+        document_type=result.get("document_type", ""),
+        gaps=gaps,
+        total_count=len(gaps),
+    )
+
+
+@app.post("/resolve-gap", response_model=ResolveGapResponse)
+async def resolve_gap(request: ResolveGapRequest):
+    """
+    Convert a user's gap resolution into an inline Suggestion.
+
+    The user provides either a selected multiple-choice option or a custom free-text
+    response. The system generates a surgical suggestion (original_text + suggested_text
+    + rationale) that follows the exact same schema as /suggest-updates — so the frontend
+    can feed it into the same suggesting-mode review flow without any special casing.
+
+    Resolving a gap never directly edits the document. The returned Suggestion must be
+    explicitly accepted by the user through the editor's suggest/approve UI.
+    """
+    if not request.selected_option_text and not request.custom_response:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either selected_option_text or custom_response.",
+        )
+
+    # Load the section content from the checkpoint to validate original_text later
+    from vocalog_ai_api.application.pipelines.doc_generation_pipeline.graph import doc_gen_graph
+    config = {"configurable": {"thread_id": request.document_id}}
+    checkpoint = doc_gen_graph.get_state(config)
+
+    if checkpoint is None or not checkpoint.values:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document '{request.document_id}' not found.",
+        )
+
+    # Find the section content — check approved sections first, then active draft
+    doc_state = checkpoint.values
+    section_content = ""
+    for section in doc_state.get("final_document", []):
+        if section.get("title") == request.section_title:
+            section_content = section.get("content", "")
+            break
+    if not section_content:
+        section_content = doc_state.get("current_section_content", "")
+
+    if not section_content:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Section '{request.section_title}' has no content to anchor the suggestion to.",
+        )
+
+    selected_text = request.selected_option_text or request.custom_response
+
+    raw = resolve_gap_to_suggestion(
+        document_id=request.document_id,
+        section_title=request.section_title,
+        section_index=request.section_index,
+        section_content=section_content,
+        gap_id=request.gap_id,
+        gap_description=request.gap_description,
+        question=request.question,
+        selected_text=selected_text,
+    )
+
+    if raw is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate suggestion from gap resolution. Please try again.",
+        )
+
+    return ResolveGapResponse(suggestion=Suggestion(**raw))
+
+
+# ── Project Analysis ─────────────────────────────────────────────────────────
+
+@app.post("/analyze-project-meetings", response_model=ProjectAnalysisResponse)
+async def analyze_project_meetings(request: ProjectAnalysisRequest):
+    """
+    Ingest multiple meeting transcripts and assess cross-meeting consistency
+    before generating a document.
+
+    For each section defined in the target document strategy (SRS / PRD / SDD),
+    retrieves the most relevant excerpts from every meeting independently, then
+    asks an LLM to identify:
+
+      • Conflicts  — meetings that state contradictory positions on the same topic.
+      • Aligned    — topics where all meetings agree, ready for document generation.
+      • Thin areas — topics only mentioned in one meeting (insufficient to verify).
+
+    Returns an overall readiness verdict:
+      • 'ready'              — no conflicts, sufficient multi-meeting coverage.
+      • 'conflicts_detected' — one or more contradictions must be resolved first.
+      • 'insufficient_data'  — too few meetings or content to establish consensus.
+
+    At least two meeting sources are required to detect conflicts.
+    """
+    initial_state = {
+        "project_id": request.project_id,
+        "document_type": request.document_type,
+        "meeting_sources": [
+            {"meeting_id": s.meeting_id, "content": s.content}
+            for s in request.meeting_sources
+        ],
+        "conflicts": [],
+        "aligned_topics": [],
+        "thin_coverage_areas": [],
+        "overall_readiness": "",
+        "analysis_summary": "",
+    }
+
+    result = project_analysis_graph.invoke(initial_state)
+
+    conflicts = [ConflictItemSchema(**c) for c in result.get("conflicts", [])]
+    aligned = [AlignedTopicSchema(**a) for a in result.get("aligned_topics", [])]
+
+    return ProjectAnalysisResponse(
+        project_id=request.project_id,
+        document_type=request.document_type,
+        overall_readiness=result.get("overall_readiness", "insufficient_data"),
+        analysis_summary=result.get("analysis_summary", ""),
+        conflicts=conflicts,
+        aligned_topics=aligned,
+        thin_coverage_areas=result.get("thin_coverage_areas", []),
+        meetings_analyzed=len(request.meeting_sources),
     )
 
 
