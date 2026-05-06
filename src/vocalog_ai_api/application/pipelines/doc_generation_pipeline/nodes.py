@@ -90,6 +90,20 @@ def generate_section(state: DocumentGenerationState) -> dict:
     relevant_context = retrieve_context(state["project_id"], query=section_title, limit=4)
     print(f"Context retrieved: {len(relevant_context)} chars")
 
+    # Build resolution directives block so the LLM knows which meeting to trust per topic
+    resolutions = state.get("conflict_resolutions") or []
+    resolution_block = ""
+    if resolutions:
+        lines = [
+            f"- [{r['topic']}] Follow meeting '{r['authoritative_meeting_id']}': {r['authoritative_position']}"
+            for r in resolutions
+        ]
+        resolution_block = (
+            "\n\nCONFLICT RESOLUTIONS — For the topics listed below you MUST follow the "
+            "specified meeting's position and IGNORE any contradictory statements from "
+            "other meetings:\n" + "\n".join(lines)
+        )
+
     is_refinement = action == "refine" and feedback and state.get("current_section_content")
 
     # Record the outgoing draft + feedback in history before overwriting
@@ -114,6 +128,9 @@ def generate_section(state: DocumentGenerationState) -> dict:
             section_title=section_title,
             context=relevant_context,
         )
+
+    if resolution_block:
+        prompt += resolution_block
 
     response = llm.invoke([HumanMessage(content=prompt)])
     content = response.content

@@ -47,6 +47,9 @@ from vocalog_ai_api.api.schemas import (
     ProjectAnalysisResponse,
     ConflictItemSchema,
     AlignedTopicSchema,
+    ConflictResolutionInput,
+    ResolveConflictRequest,
+    ResolveConflictResponse,
 )
 from vocalog_ai_api.application.pipelines.mom_pipeline.graph import mom_graph
 from vocalog_ai_api.application.pipelines.action_items_pipeline.graph import action_items_graph
@@ -160,6 +163,14 @@ async def start_document_generation(request: DemoDocumentGenerationRequest):
         "meeting_sources": [
             {"meeting_id": s.meeting_id, "content": s.content}
             for s in request.sources
+        ],
+        "conflict_resolutions": [
+            {
+                "topic": r.topic,
+                "authoritative_meeting_id": r.authoritative_meeting_id,
+                "authoritative_position": r.authoritative_position,
+            }
+            for r in (request.conflict_resolutions or [])
         ],
         "sections_outline": [],
         "current_section_index": 0,
@@ -564,6 +575,47 @@ async def resolve_gap(request: ResolveGapRequest):
         )
 
     return ResolveGapResponse(suggestion=Suggestion(**raw))
+
+
+# ── Conflict Resolution ───────────────────────────────────────────────────────
+
+@app.post("/resolve-conflict", response_model=ResolveConflictResponse)
+async def resolve_conflict(request: ResolveConflictRequest):
+    """
+    Convert a user's meeting selection into a ConflictResolution ready to pass
+    to POST /generate-document.
+
+    The user picks either meeting_a_id or meeting_b_id from a conflict returned
+    by /analyze-project-meetings. This endpoint validates the choice and packages
+    it as a ConflictResolutionInput with the correct authoritative_position text.
+
+    The returned resolution should be collected alongside any others and passed
+    as conflict_resolutions in the /generate-document request body.
+    """
+    conflict = request.conflict
+    chosen_id = request.authoritative_meeting_id
+
+    if chosen_id == conflict.meeting_a_id:
+        position = conflict.meeting_a_position
+    elif chosen_id == conflict.meeting_b_id:
+        position = conflict.meeting_b_position
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"authoritative_meeting_id '{chosen_id}' does not match either "
+                f"meeting_a_id ('{conflict.meeting_a_id}') or "
+                f"meeting_b_id ('{conflict.meeting_b_id}') in the conflict."
+            ),
+        )
+
+    return ResolveConflictResponse(
+        resolution=ConflictResolutionInput(
+            topic=conflict.topic,
+            authoritative_meeting_id=chosen_id,
+            authoritative_position=position,
+        )
+    )
 
 
 # ── Project Analysis ─────────────────────────────────────────────────────────

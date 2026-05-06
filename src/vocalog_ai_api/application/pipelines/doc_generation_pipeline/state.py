@@ -11,6 +11,12 @@ class MeetingSource(TypedDict):
     content: Any      # str (raw transcript) or dict (structured with 'text' + 'words')
 
 
+class ConflictResolution(TypedDict):
+    topic: str                     # The conflicted topic (matches ConflictItem.topic)
+    authoritative_meeting_id: str  # The meeting whose position should be followed
+    authoritative_position: str    # What that meeting actually says on the topic
+
+
 class DocumentGenerationState(TypedDict):
     # ── Persistent identity ──────────────────────────────────────────────────
     thread_id: str          # LangGraph thread_id == document_id exposed in API
@@ -21,6 +27,7 @@ class DocumentGenerationState(TypedDict):
 
     # ── Source material ──────────────────────────────────────────────────────
     meeting_sources: List[MeetingSource]  # One or more meetings to synthesise from
+    conflict_resolutions: List[ConflictResolution]  # User-resolved conflicts from /analyze-project-meetings
 
     # ── Document progress ────────────────────────────────────────────────────
     sections_outline: List[str]       # Ordered section headings from the strategy

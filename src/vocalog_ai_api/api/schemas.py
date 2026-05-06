@@ -62,6 +62,14 @@ class DemoDocumentGenerationRequest(BaseModel):
         ...,
         description="One or more meeting transcripts to synthesise the document from.",
     )
+    conflict_resolutions: Optional[List[ConflictResolutionInput]] = Field(
+        default=None,
+        description=(
+            "Resolved conflicts from POST /analyze-project-meetings. "
+            "Each resolution tells the generation pipeline which meeting to follow "
+            "when two meetings contradict each other on a topic."
+        ),
+    )
 
 
 class SectionFeedbackRequest(BaseModel):
@@ -280,16 +288,6 @@ class ResolveGapResponse(BaseModel):
 
 # ── Project Analysis schemas ─────────────────────────────────────────────────
 
-class ProjectAnalysisRequest(BaseModel):
-    project_id: str = Field(..., description="Project identifier shared across all meetings.")
-    document_type: Literal["srs", "prd", "sdd"] = Field(
-        ..., description="Document type to assess readiness for."
-    )
-    meeting_sources: List[MeetingSourceInput] = Field(
-        ..., description="Two or more meeting transcripts to analyze for conflicts."
-    )
-
-
 class ConflictItemSchema(BaseModel):
     topic: str
     conflict_description: str
@@ -306,6 +304,16 @@ class AlignedTopicSchema(BaseModel):
     supporting_meetings: List[str]
 
 
+class ProjectAnalysisRequest(BaseModel):
+    project_id: str = Field(..., description="Project identifier shared across all meetings.")
+    document_type: Literal["srs", "prd", "sdd"] = Field(
+        ..., description="Document type to assess readiness for."
+    )
+    meeting_sources: List[MeetingSourceInput] = Field(
+        ..., description="Two or more meeting transcripts to analyze for conflicts."
+    )
+
+
 class ProjectAnalysisResponse(BaseModel):
     project_id: str
     document_type: str
@@ -315,6 +323,27 @@ class ProjectAnalysisResponse(BaseModel):
     aligned_topics: List[AlignedTopicSchema] = Field(default_factory=list)
     thin_coverage_areas: List[str] = Field(default_factory=list)
     meetings_analyzed: int
+
+
+class ConflictResolutionInput(BaseModel):
+    topic: str = Field(..., description="The conflicted topic — must match ConflictItemSchema.topic.")
+    authoritative_meeting_id: str = Field(
+        ..., description="Meeting ID whose position should be followed."
+    )
+    authoritative_position: str = Field(
+        ..., description="What the authoritative meeting states on this topic."
+    )
+
+
+class ResolveConflictRequest(BaseModel):
+    conflict: ConflictItemSchema = Field(..., description="The conflict item from /analyze-project-meetings.")
+    authoritative_meeting_id: str = Field(
+        ..., description="'meeting_a_id' or 'meeting_b_id' from the conflict — the one to follow."
+    )
+
+
+class ResolveConflictResponse(BaseModel):
+    resolution: ConflictResolutionInput
 
 
 # ── Action Items schemas ─────────────────────────────────────────────────────
