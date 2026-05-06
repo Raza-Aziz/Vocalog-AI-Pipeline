@@ -1,79 +1,84 @@
+import json
+import re
 import uuid
 from typing import List, Literal
 
 from pydantic import BaseModel, Field
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from vocalog_ai_api.application.pipelines.suggestion_pipeline.state import SuggestionState, SuggestionItem
 from vocalog_ai_api.application.pipelines.doc_generation_pipeline.vector_store import ingest_minutes
 from vocalog_ai_api.infrastructure.vector_store.qdrant import query_by_meeting
 from vocalog_ai_api.infrastructure.llm_providers.groq import llm
 
-# ── Structured output schemas (Pydantic, used only with_structured_output) ────
+
+# ── Pydantic models for validation only (not passed to with_structured_output) ─
 
 class _LLMSuggestion(BaseModel):
-    original_text: str = Field(
-        description=(
-            "EXACT verbatim substring of the existing section content to be modified. "
-            "Must be copy-pasted character-for-character from the section text. "
-            "For 'addition' type, use the last sentence of the relevant paragraph as an anchor."
-        )
-    )
-    suggested_text: str = Field(
-        description=(
-            "The proposed replacement or new text. "
-            "Empty string for 'deletion' type."
-        )
-    )
-    suggestion_type: Literal["update", "addition", "deletion"] = Field(
-        description=(
-            "'update' = replace original_text with suggested_text. "
-            "'addition' = insert suggested_text after the anchor in original_text. "
-            "'deletion' = remove original_text entirely."
-        )
-    )
-    rationale: str = Field(
-        description="One or two sentences explaining why this change is necessary based on the new meeting."
-    )
-    confidence: float = Field(
-        description="0.9–1.0: clearly required. 0.7–0.9: likely needed. 0.5–0.7: possibly needed.",
-        ge=0.0,
-        le=1.0,
-    )
+    original_text: str
+    suggested_text: str
+    suggestion_type: Literal["update", "addition", "deletion"]
+    rationale: str
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class _SectionAnalysis(BaseModel):
-    suggestions: List[_LLMSuggestion] = Field(
-        default_factory=list,
-        description="List of surgical suggestions. Empty list if nothing needs changing.",
-    )
+    suggestions: List[_LLMSuggestion] = Field(default_factory=list)
 
 
-_structured_llm = llm.with_structured_output(_SectionAnalysis)
+# ── JSON extraction helper ────────────────────────────────────────────────────
 
-_ANALYSIS_PROMPT = """\
-You are a precise document synchronization assistant. Your job is to identify whether \
-new meeting discussion makes any part of an existing document section stale, contradicted, \
-or incomplete — and to generate surgical inline suggestions.
+def _extract_json(text: str) -> dict:
+    """Parse JSON from LLM response, handling markdown code fences gracefully."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+
+_ANALYSIS_SYSTEM = (
+    "You are a precise document synchronization assistant. "
+    'You MUST respond with ONLY a valid JSON object with a single key "suggestions" '
+    "containing a list of suggestion objects. Each suggestion object must have: "
+    "original_text (string), suggested_text (string), "
+    "suggestion_type ('update'|'addition'|'deletion'), rationale (string), confidence (float 0-1). "
+    'If nothing needs changing return {"suggestions": []}. No markdown, no explanation — JSON only.'
+)
+
+_ANALYSIS_HUMAN = """\
+Analyze this document section against the new meeting discussion and return suggestions.
 
 EXISTING DOCUMENT SECTION: "{section_title}"
 ───────────────────────────────────────────
 {section_content}
 ───────────────────────────────────────────
 
-NEW MEETING DISCUSSION (excerpts most relevant to this section):
+NEW MEETING DISCUSSION:
 ───────────────────────────────────────────
 {new_meeting_context}
 ───────────────────────────────────────────
 
-RULES — read carefully before generating suggestions:
-1. original_text MUST be a verbatim, character-for-character copy of text from the \
-   EXISTING SECTION above. Never paraphrase or rewrite it.
-2. Only suggest changes that are directly, clearly supported by the new meeting discussion.
-3. Do NOT suggest stylistic, formatting, or structural changes — only factual/substantive updates.
-4. For 'addition': original_text is the last sentence of the paragraph after which to insert.
-5. If nothing in this section needs changing, return an empty suggestions list.
-6. Confidence guide: 0.9+ = unambiguous contradiction or new fact; 0.7–0.9 = strong implication; \
-   0.5–0.7 = possible relevance. Do not include suggestions below 0.5.\
+RULES:
+1. original_text MUST be a verbatim, character-for-character copy from the EXISTING SECTION.
+2. Only suggest changes directly supported by the new meeting discussion.
+3. No stylistic or formatting changes — factual/substantive updates only.
+4. For 'addition': original_text is the last sentence of the paragraph to insert after.
+5. Confidence: 0.9+ = clear contradiction or new fact; 0.7–0.9 = strong implication; 0.5–0.7 = possible. Omit below 0.5.\
 """
 
 
@@ -179,14 +184,19 @@ def analyze_sections(state: SuggestionState) -> dict:
             for i, r in enumerate(new_meeting_chunks)
         )
 
-        prompt = _ANALYSIS_PROMPT.format(
-            section_title=section_title,
-            section_content=section_content,
-            new_meeting_context=new_meeting_context,
-        )
+        messages = [
+            SystemMessage(content=_ANALYSIS_SYSTEM),
+            HumanMessage(content=_ANALYSIS_HUMAN.format(
+                section_title=section_title,
+                section_content=section_content[:2500],
+                new_meeting_context=new_meeting_context[:800],
+            )),
+        ]
 
         try:
-            result: _SectionAnalysis = _structured_llm.invoke(prompt)
+            response = llm.invoke(messages)
+            parsed = _extract_json(response.content)
+            result = _SectionAnalysis.model_validate(parsed)
         except Exception as e:
             print(f"[SuggestionPipeline] LLM call failed for section '{section_title}': {e}")
             continue
